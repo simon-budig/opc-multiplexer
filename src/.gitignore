@@ -1,0 +1,5 @@
+*.o
+.deps
+/Makefile
+/Makefile.in
+/opc-mpx
