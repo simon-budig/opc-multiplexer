@@ -3,6 +3,9 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <netdb.h>
+
 #include <unistd.h>
 #include <ctype.h>
 
@@ -41,8 +44,7 @@ opc_broker_class_init (OpcBrokerClass *klass)
 static void
 opc_broker_init (OpcBroker *broker)
 {
-  broker->clients = g_hash_table_new (g_str_hash, g_str_equal);
-  broker->ongoing_requests = g_hash_table_new (g_int_hash, g_int_equal);
+  broker->clients = NULL;
 }
 
 
@@ -53,8 +55,7 @@ opc_broker_finalize (GObject *object)
 
   if (broker->sock_io != NULL)
     g_io_channel_unref (broker->sock_io);
-  g_hash_table_unref (broker->clients);
-  g_hash_table_unref (broker->ongoing_requests);
+  g_list_free (broker->clients);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -147,11 +148,7 @@ opc_broker_release_client (gpointer  user_data,
 {
   OpcBroker *broker = OPC_BROKER (user_data);
 
-  broker->anon_clients = g_list_remove_all (broker->anon_clients, stale_client);
-
-  g_hash_table_foreach_remove (broker->clients,
-                               opc_broker_release_client_helper,
-                               stale_client);
+  broker->clients = g_list_remove_all (broker->clients, stale_client);
 }
 
 
@@ -177,7 +174,77 @@ opc_broker_socket_accept (GIOChannel   *source,
 
   g_object_weak_ref (G_OBJECT (client), opc_broker_release_client, broker);
 
-  broker->anon_clients = g_list_prepend (broker->anon_clients, client);
+  broker->clients = g_list_append (broker->clients, client);
+
+  return TRUE;
+}
+
+
+gboolean
+opc_broker_connect_target (OpcBroker *broker,
+                           gchar     *hostport,
+                           guint16    default_port)
+{
+  gchar *host, *colon;
+  gint port;
+  gint success = 0;
+  gint flag;
+
+  broker->target_fd = -1;
+
+  host = g_strdup (hostport);
+  colon = strchr (host, ':');
+  port = default_port;
+
+  if (colon)
+    {
+      *colon = '\0';
+      port = g_ascii_strtoll (colon + 1, NULL, 10);
+    }
+
+  if (port)
+    {
+      struct addrinfo *addr, *i;
+      getaddrinfo (*host ? host : "localhost", 0, 0, &addr);
+
+      for (i = addr; i; i = i->ai_next)
+        {
+          if (i->ai_family == PF_INET)
+            {
+              memcpy (&broker->target_address,
+                      i->ai_addr, sizeof (broker->target_address));
+              broker->target_address.sin_port = htons (port);
+              success = 1;
+              break;
+            }
+        }
+
+      freeaddrinfo (addr);
+    }
+
+  g_free (host);
+
+  if (!success)
+    return FALSE;
+
+  broker->target_fd = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+  if (connect (broker->target_fd,
+               (struct sockaddr *) &broker->target_address,
+               sizeof (broker->target_address)) < 0)
+    {
+      close (broker->target_fd);
+      return FALSE;
+    }
+
+  flag = 1;
+  setsockopt (broker->target_fd,
+              IPPROTO_TCP,
+              TCP_NODELAY,
+              (char *) &flag,
+              sizeof (flag));
+
+  signal (SIGPIPE, SIG_IGN);
 
   return TRUE;
 }

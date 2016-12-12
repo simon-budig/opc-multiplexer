@@ -16,7 +16,9 @@ static gboolean   opc_client_socket_recv (GIOChannel   *source,
                                           GIOCondition  condition,
                                           gpointer      data);
 
-#define OPC_MESSAGE_LEN (4 + 512 * 3 + 1)
+#define OPC_MESSAGE_LEN (4 + 512 * 3)
+
+#define GET_OPC_FRAME_LEN(buf, len) ((len) >= 4 ? (buf)[2] * 256 + (buf)[3] : -1)
 
 enum
 {
@@ -55,7 +57,8 @@ opc_client_finalize (GObject *object)
   if (client->gio != NULL)
     g_io_channel_unref (client->gio);
 
-  g_string_free (client->inbuf, TRUE);
+  g_free (client->inbuf);
+  g_free (client->cur_frame);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -77,7 +80,11 @@ opc_client_new (OpcBroker *broker,
   client->broker = broker;
   client->gio = g_io_channel_unix_new (fd);
   g_io_channel_set_close_on_unref (client->gio, TRUE);
-  client->inbuf = g_string_new (NULL);
+  client->dump_len = 0;
+  client->in_len = 0;
+  client->inbuf = g_new (guint8, OPC_MESSAGE_LEN);
+  client->cur_len = 0;
+  client->cur_frame = g_new (guint8, OPC_MESSAGE_LEN);
 
   g_io_add_watch (client->gio, G_IO_IN | G_IO_ERR | G_IO_HUP,
                   opc_client_socket_recv, client);
@@ -87,40 +94,15 @@ opc_client_new (OpcBroker *broker,
 
 
 static gboolean
-opc_client_dispatch_string (OpcClient *client)
-{
-  gsize len;
-  gchar *req_message;
-
-  g_return_val_if_fail (OPC_IS_CLIENT (client), FALSE);
-
-  /* look for the '\0' byte */
-  len = strlen (client->inbuf->str);
-
-  g_warn_if_fail (len < client->inbuf->len);
-
-  req_message = g_strdup (client->inbuf->str);
-  g_string_erase (client->inbuf, 0, (gssize) len + 1);
-
-  g_printerr ("dispatching: \"%s\"\n", req_message);
-
-  g_free (req_message);
-
-#warning hier!
-
-  return FALSE;
-}
-
-
-static gboolean
 opc_client_socket_recv (GIOChannel   *source,
                         GIOCondition  condition,
                         gpointer      data)
 {
-  static gchar msgbuf[OPC_MESSAGE_LEN] = { 0, };
+  static gchar dump_buffer[OPC_MESSAGE_LEN];
   OpcClient *client = OPC_CLIENT (data);
   gchar *c;
   ssize_t ret;
+  gint total_len = 0;
 
   if (condition & G_IO_ERR ||
       condition & G_IO_HUP ||
@@ -131,8 +113,34 @@ opc_client_socket_recv (GIOChannel   *source,
       return FALSE;
     }
 
-  ret = recv (g_io_channel_unix_get_fd (source),
-              msgbuf, OPC_MESSAGE_LEN - 1, 0);
+
+  /* the following value is only used if we have >= 4 bytes read. */
+  total_len = GET_OPC_FRAME_LEN (client->inbuf, client->in_len) + 4;
+
+  /* we need to make sure to not read more than the current opc package */
+  if (client->in_len < 3)
+    {
+      /* opc header (4 bytes) */
+      ret = recv (g_io_channel_unix_get_fd (source),
+                  client->inbuf + client->in_len,
+                  4 - client->in_len,
+                  0);
+    }
+  else if (client->in_len < MIN (total_len, OPC_MESSAGE_LEN))
+    {
+      ret = recv (g_io_channel_unix_get_fd (source),
+                  client->inbuf + client->in_len,
+                  MIN (total_len, OPC_MESSAGE_LEN) - client->in_len,
+                  0);
+    }
+  else
+    {
+      ret = recv (g_io_channel_unix_get_fd (source),
+                  dump_buffer,
+                  MIN (total_len - OPC_MESSAGE_LEN - client->dump_len,
+                       sizeof (dump_buffer)),
+                  0);
+    }
 
   if (ret == 0)
     {
@@ -151,16 +159,21 @@ opc_client_socket_recv (GIOChannel   *source,
 
   if (ret > 0)
     {
-      g_string_append_len (client->inbuf, msgbuf, ret);
+      if (client->in_len < OPC_MESSAGE_LEN)
+        client->in_len += ret;
+      else
+        client->dump_len += ret;
+    }
 
-      /* look for a \0, most likely at the end of the transferred bytes */
-      for (c = msgbuf + ret - 1; c >= msgbuf; c--)
+  if (client->in_len >= 4)
+    {
+      total_len = GET_OPC_FRAME_LEN (client->inbuf, client->in_len) + 4;
+
+      if (client->in_len + client->dump_len == total_len)
         {
-          if (*c == '\0')
-            {
-              /* parse and dispatch inbuf message */
-              opc_client_dispatch_string (client);
-            }
+          g_printerr ("got frame from client %p\n", client);
+          client->in_len = 0;
+          client->dump_len = 0;
         }
     }
 

@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +44,14 @@ main (int   argc,
     verbosity_level = 2;
 
   broker = opc_broker_new ();
+
+  if (!opc_broker_connect_target (broker,
+                                  "localhost:15163",
+                                  15163))
+    {
+      perror ("can't connect to target");
+      return -1;
+    }
 
   ret = opc_broker_run (broker,
                         7890,

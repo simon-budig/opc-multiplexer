@@ -22,8 +22,14 @@ struct _OpcClient
 {
   GObject     parent_instance;
   OpcBroker  *broker;
+  gint        max_channels;
+
   GIOChannel *gio;
-  GString    *inbuf;
+  gint        dump_len;
+  gint        in_len;
+  guint8     *inbuf;
+  gint        cur_len;
+  guint8     *cur_frame;
 };
 
 

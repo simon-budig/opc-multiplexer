@@ -1,7 +1,6 @@
 #ifndef __OPC_BROKER_H__
 #define __OPC_BROKER_H__
 
-
 #define OPC_TYPE_BROKER            (opc_broker_get_type ())
 #define OPC_BROKER(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), OPC_TYPE_BROKER, OpcBroker))
 #define OPC_BROKER_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  OPC_TYPE_BROKER, OpcBrokerClass))
@@ -15,13 +14,20 @@ struct _OpcBroker
 {
   GObject     parent_instance;
 
-  gint        port_number;
-  GIOChannel *sock_io;
+  gint                target_fd;
+  struct sockaddr_in  target_address;
+  GIOChannel         *opc_target;
+  gint                num_channels;
+  gint                out_len;
+  gchar              *outbuf;
 
-  GHashTable *ongoing_requests;
+  gint                port_number;
+  GIOChannel         *sock_io;
 
-  GHashTable *clients;
-  GList      *anon_clients;
+  OpcClient          *cur_client;
+  OpcClient          *next_client;
+
+  GList              *clients;
 };
 
 struct _OpcBrokerClass
@@ -36,6 +42,9 @@ struct _OpcBrokerClass
 GType        opc_broker_get_type       (void) G_GNUC_CONST;
 
 OpcBroker *  opc_broker_new            (void);
+gboolean     opc_broker_connect_target (OpcBroker    *broker,
+                                        gchar        *hostname,
+                                        guint16       port);
 gboolean     opc_broker_run            (OpcBroker    *broker,
                                         guint16       port,
                                         GError      **err);
