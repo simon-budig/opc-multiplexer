@@ -30,6 +30,7 @@ struct _OpcBroker
 
   OpcClient          *cur_client;
   OpcClient          *next_client;
+  guint               timeout_id;
 
   GList              *clients;
 };

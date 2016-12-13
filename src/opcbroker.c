@@ -144,6 +144,14 @@ opc_broker_release_client (gpointer  user_data,
 {
   OpcBroker *broker = OPC_BROKER (user_data);
 
+  g_printerr ("releasing client %p\n", stale_client);
+
+  if (broker->cur_client == (OpcClient *) stale_client)
+    broker->cur_client = NULL;
+
+  if (broker->next_client == (OpcClient *) stale_client)
+    broker->next_client = NULL;
+
   broker->clients = g_list_remove_all (broker->clients, stale_client);
 }
 
@@ -167,10 +175,16 @@ opc_broker_socket_accept (GIOChannel   *source,
     return TRUE;   /* accept failed, we need to continue watching though */
 
   client = opc_client_new (broker, fd);
+  g_printerr ("new client: %p\n", client);
 
   g_object_weak_ref (G_OBJECT (client), opc_broker_release_client, broker);
 
   broker->clients = g_list_append (broker->clients, client);
+
+  if (!broker->cur_client)
+    {
+      broker->cur_client = broker->clients ? broker->clients->data : NULL;
+    }
 
   return TRUE;
 }
@@ -217,6 +231,9 @@ void
 opc_broker_notify_frame (OpcBroker *broker,
                          OpcClient *client)
 {
+  if (broker->cur_client != client)
+    return;
+
   if (!broker->outhandler)
     {
       broker->out_len = MIN (client->cur_len, 4 + 3 * 512);
@@ -308,6 +325,41 @@ opc_broker_connect_target (OpcBroker *broker,
 }
 
 
+static gboolean
+opc_broker_next_client (gpointer user_data)
+{
+  OpcBroker *broker = OPC_BROKER (user_data);
+
+  g_printerr ("currently %d clients\n", g_list_length (broker->clients));
+
+  broker->clients = g_list_remove_all (broker->clients,
+                                       broker->cur_client);
+  broker->clients = g_list_append (broker->clients,
+                                   broker->cur_client);
+
+  broker->cur_client = broker->clients ? broker->clients->data : NULL;
+
+  while (broker->cur_client &&
+         broker->cur_client->cur_len == 0)
+    {
+      broker->clients = g_list_remove_all (broker->clients,
+                                           broker->cur_client);
+      broker->clients = g_list_append (broker->clients,
+                                       broker->cur_client);
+
+      broker->cur_client = broker->clients ? broker->clients->data : NULL;
+    }
+
+  if (broker->cur_client &&
+      broker->cur_client->cur_len > 0)
+    {
+      opc_broker_notify_frame (broker, broker->cur_client);
+    }
+
+  return TRUE;
+}
+
+
 gboolean
 opc_broker_run (OpcBroker    *broker,
                 guint16       portno,
@@ -322,6 +374,8 @@ opc_broker_run (OpcBroker    *broker,
   g_io_add_watch (broker->sock_io,
                   G_IO_IN | G_IO_ERR | G_IO_HUP,
                   opc_broker_socket_accept, broker);
+
+  broker->timeout_id = g_timeout_add (10000, opc_broker_next_client, broker);
 
   return TRUE;
 }

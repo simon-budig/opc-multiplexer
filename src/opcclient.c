@@ -144,7 +144,7 @@ opc_client_socket_recv (GIOChannel   *source,
 
   if (ret == 0)
     {
-      g_printerr ("empty recv - shutting down client.\n");
+      g_printerr ("empty recv - shutting down client %p.\n", client);
       g_object_unref (client);
       return FALSE;
     }
