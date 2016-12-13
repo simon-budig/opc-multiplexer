@@ -171,9 +171,14 @@ opc_client_socket_recv (GIOChannel   *source,
 
       if (client->in_len + client->dump_len == total_len)
         {
-          g_printerr ("got frame from client %p\n", client);
+          guint8 *tmp;
+          tmp = client->cur_frame;
+          client->cur_frame = client->inbuf;
+          client->inbuf = tmp;
+          client->cur_len = client->in_len;
           client->in_len = 0;
           client->dump_len = 0;
+          opc_broker_notify_frame (client->broker, client);
         }
     }
 

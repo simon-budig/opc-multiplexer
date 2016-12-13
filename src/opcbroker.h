@@ -17,12 +17,16 @@ struct _OpcBroker
   gint                target_fd;
   struct sockaddr_in  target_address;
   GIOChannel         *opc_target;
+  gint                port_number;
+  GIOChannel         *sock_io;
+
   gint                num_channels;
+  gint                out_pos;
   gint                out_len;
   gchar              *outbuf;
 
-  gint                port_number;
-  GIOChannel         *sock_io;
+  guint               outhandler;
+  gboolean            out_needed;
 
   OpcClient          *cur_client;
   OpcClient          *next_client;
@@ -48,5 +52,8 @@ gboolean     opc_broker_connect_target (OpcBroker    *broker,
 gboolean     opc_broker_run            (OpcBroker    *broker,
                                         guint16       port,
                                         GError      **err);
+void         opc_broker_notify_frame   (OpcBroker    *broker,
+                                        OpcClient    *client);
+
 
 #endif  /*  __OPC_BROKER_H__  */

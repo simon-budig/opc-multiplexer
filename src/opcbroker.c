@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -73,6 +74,10 @@ opc_broker_new (void)
 
   broker = g_object_new (OPC_TYPE_BROKER, NULL);
 
+  broker->outbuf = g_new (guint8, 4 + 512 * 3);
+  broker->out_len = 0;
+  broker->out_pos = 0;
+
   return broker;
 }
 
@@ -133,15 +138,6 @@ opc_broker_socket_open (OpcBroker    *broker,
 }
 
 
-static gboolean
-opc_broker_release_client_helper (gpointer key,
-                                  gpointer value,
-                                  gpointer user_data)
-{
-  return value == user_data;
-}
-
-
 static void
 opc_broker_release_client (gpointer  user_data,
                            GObject  *stale_client)
@@ -177,6 +173,64 @@ opc_broker_socket_accept (GIOChannel   *source,
   broker->clients = g_list_append (broker->clients, client);
 
   return TRUE;
+}
+
+
+static gboolean
+opc_broker_socket_send (GIOChannel   *source,
+                        GIOCondition  condition,
+                        gpointer      data)
+{
+  OpcBroker *broker = OPC_BROKER (data);
+  gssize ret;
+
+  g_return_val_if_fail (broker->opc_target == source, FALSE);
+
+  if (broker->out_pos < broker->out_len)
+    {
+      ret = send (g_io_channel_unix_get_fd (broker->opc_target),
+                  broker->outbuf + broker->out_pos,
+                  broker->out_len - broker->out_pos, 0);
+      if (ret < 0)
+        {
+          perror ("opc send() failed");
+          exit (1);
+        }
+      else
+        {
+          broker->out_pos += ret;
+        }
+    }
+
+  if (broker->out_pos == broker->out_len)
+    {
+      broker->outhandler = 0;
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
+
+
+void
+opc_broker_notify_frame (OpcBroker *broker,
+                         OpcClient *client)
+{
+  if (!broker->outhandler)
+    {
+      broker->out_len = MIN (client->cur_len, 4 + 3 * 512);
+      broker->out_pos = 0;
+      memcpy (broker->outbuf, client->cur_frame, broker->out_len);
+      broker->outbuf[2] = (broker->out_len - 4) / 256;
+      broker->outbuf[3] = (broker->out_len - 4) % 256;
+      broker->outhandler = g_io_add_watch (broker->opc_target, G_IO_OUT,
+                                           opc_broker_socket_send, broker);
+    }
+  else
+    {
+      broker->out_needed = TRUE;
+    }
 }
 
 
@@ -234,6 +288,7 @@ opc_broker_connect_target (OpcBroker *broker,
                sizeof (broker->target_address)) < 0)
     {
       close (broker->target_fd);
+      g_printerr ("connect failed\n");
       return FALSE;
     }
 
@@ -245,6 +300,9 @@ opc_broker_connect_target (OpcBroker *broker,
               sizeof (flag));
 
   signal (SIGPIPE, SIG_IGN);
+
+  broker->opc_target = g_io_channel_unix_new (broker->target_fd);
+  g_io_channel_set_close_on_unref (broker->opc_target, TRUE);
 
   return TRUE;
 }
