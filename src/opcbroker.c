@@ -19,6 +19,10 @@
 
 #define OPC_ERROR      (g_quark_from_static_string  ("opc-error-quark"))
 
+#define CLIENT_RUN_TIME        (10.0)
+#define CLIENT_TRANSITION_TIME (2.0)
+#define ROUND(x) ((int) ((((x) < 0) ? (x) - 0.5 : (x) + 0.5)))
+
 enum
 {
   LAST_SIGNAL
@@ -26,7 +30,8 @@ enum
 
 // static guint opc_broker_signals[LAST_SIGNAL] = { 0 };
 
-static void    opc_broker_finalize    (GObject    *object);
+static void      opc_broker_finalize     (GObject  *object);
+static gboolean  opc_broker_check_client (gpointer  user_data);
 
 G_DEFINE_TYPE (OpcBroker, opc_broker, G_TYPE_OBJECT)
 
@@ -149,8 +154,8 @@ opc_broker_release_client (gpointer  user_data,
   if (broker->cur_client == (OpcClient *) stale_client)
     broker->cur_client = NULL;
 
-  if (broker->next_client == (OpcClient *) stale_client)
-    broker->next_client = NULL;
+  if (broker->prev_client == (OpcClient *) stale_client)
+    broker->prev_client = NULL;
 
   broker->clients = g_list_remove_all (broker->clients, stale_client);
 }
@@ -181,10 +186,7 @@ opc_broker_socket_accept (GIOChannel   *source,
 
   broker->clients = g_list_append (broker->clients, client);
 
-  if (!broker->cur_client)
-    {
-      broker->cur_client = broker->clients ? broker->clients->data : NULL;
-    }
+  opc_broker_check_client (broker);
 
   return TRUE;
 }
@@ -226,28 +228,95 @@ opc_broker_socket_send (GIOChannel   *source,
 }
 
 
+static gboolean
+opc_broker_render_frame (void *user_data)
+{
+  OpcBroker *broker = OPC_BROKER (user_data);
+  gdouble now;
+  OpcClient *cur, *prev;
+  gboolean ret;
+
+  now = opc_get_current_time ();
+
+  cur = broker->cur_client;
+  prev = broker->prev_client;
+
+  if (!cur)
+    return G_SOURCE_REMOVE;
+
+  if (now - broker->start_time < CLIENT_TRANSITION_TIME)
+    {
+      gdouble alpha;
+      gint i;
+
+      if (prev)
+        broker->out_len = MAX (prev->cur_len, cur->cur_len);
+      else
+        broker->out_len = cur->cur_len;
+
+      broker->out_len = MIN (broker->out_len, 4 + 3 * 512);
+
+      /* copy the channel + command from first client. This is somewhat dodgy */
+      broker->outbuf[0] = cur->cur_frame[0];
+      broker->outbuf[1] = cur->cur_frame[1];
+      broker->outbuf[2] = (broker->out_len - 4) / 256;
+      broker->outbuf[3] = (broker->out_len - 4) % 256;
+
+      alpha = (now - broker->start_time) / CLIENT_TRANSITION_TIME;
+
+      for (i = 4; i < broker->out_len; i++)
+        {
+          gdouble val = 0.0;
+
+          if (prev && i < prev->cur_len)
+            val += prev->cur_frame[i] * (1.0 - alpha);
+
+          if (i < cur->cur_len)
+            val += cur->cur_frame[i] * alpha;
+
+          broker->outbuf[i] = CLAMP (ROUND (val), 0, 255);
+        }
+
+      ret = G_SOURCE_CONTINUE;
+    }
+  else
+    {
+      broker->out_len = MIN (cur->cur_len, 4 + 3 * 512);
+      memcpy (broker->outbuf, cur->cur_frame, broker->out_len);
+      broker->outbuf[2] = (broker->out_len - 4) / 256;
+      broker->outbuf[3] = (broker->out_len - 4) % 256;
+
+      ret = G_SOURCE_REMOVE;
+    }
+
+  if (!broker->outhandler)
+    {
+      broker->out_pos = 0;
+      broker->outhandler = g_io_add_watch (broker->opc_target, G_IO_OUT,
+                                           opc_broker_socket_send, broker);
+    }
+
+  if (!ret)
+    broker->render_id = 0;
+
+  return ret;
+}
+
 
 void
 opc_broker_notify_frame (OpcBroker *broker,
                          OpcClient *client)
 {
-  if (broker->cur_client != client)
-    return;
+  if (client != broker->cur_client &&
+      client != broker->prev_client)
+    {
+      return;
+    }
 
-  if (!broker->outhandler)
-    {
-      broker->out_len = MIN (client->cur_len, 4 + 3 * 512);
-      broker->out_pos = 0;
-      memcpy (broker->outbuf, client->cur_frame, broker->out_len);
-      broker->outbuf[2] = (broker->out_len - 4) / 256;
-      broker->outbuf[3] = (broker->out_len - 4) % 256;
-      broker->outhandler = g_io_add_watch (broker->opc_target, G_IO_OUT,
-                                           opc_broker_socket_send, broker);
-    }
-  else
-    {
-      broker->out_needed = TRUE;
-    }
+  if (!broker->render_id)
+    broker->render_id = g_timeout_add (1000 / 60,
+                                       opc_broker_render_frame,
+                                       broker);
 }
 
 
@@ -325,35 +394,73 @@ opc_broker_connect_target (OpcBroker *broker,
 }
 
 
+static gint
+opc_broker_cmp_client (gconstpointer a,
+                       gconstpointer b)
+{
+  OpcClient *ac = OPC_CLIENT (a);
+  OpcClient *bc = OPC_CLIENT (b);
+
+  if (ac->cur_len == 0 || bc->cur_len == 0)
+    {
+      return ac->cur_len - bc->cur_len;
+    }
+
+  if (ac->last_used < bc->last_used)
+    return -1;
+  else
+    return 1;
+}
+
+
 static gboolean
-opc_broker_next_client (gpointer user_data)
+opc_broker_check_client (gpointer user_data)
 {
   OpcBroker *broker = OPC_BROKER (user_data);
+  OpcClient *client = NULL;
+  GList *l;
+  gdouble now;
 
-  g_printerr ("currently %d clients\n", g_list_length (broker->clients));
+  now = opc_get_current_time ();
 
-  broker->clients = g_list_remove_all (broker->clients,
-                                       broker->cur_client);
-  broker->clients = g_list_append (broker->clients,
-                                   broker->cur_client);
-
-  broker->cur_client = broker->clients ? broker->clients->data : NULL;
-
-  while (broker->cur_client &&
-         broker->cur_client->cur_len == 0)
+  /* check if the current client still is within its time slot */
+  if (now - broker->start_time < CLIENT_RUN_TIME)
     {
-      broker->clients = g_list_remove_all (broker->clients,
-                                           broker->cur_client);
-      broker->clients = g_list_append (broker->clients,
-                                       broker->cur_client);
+      if (broker->cur_client)
+        broker->cur_client->last_used = now;
 
-      broker->cur_client = broker->clients ? broker->clients->data : NULL;
+      return TRUE;
+    }
+
+  if (broker->prev_client)
+    {
+      g_object_unref (broker->prev_client);
+      broker->prev_client = NULL;
+    }
+
+  broker->clients = g_list_sort (broker->clients,
+                                 opc_broker_cmp_client);
+
+  /* find a new client */
+
+  client = broker->clients ? broker->clients->data : NULL;
+
+  if (client)
+    {
+      broker->prev_client = broker->cur_client;
+      broker->cur_client = client;
+      g_object_ref (broker->cur_client);
+      broker->start_time = now;
+      broker->cur_client->last_used = now;
     }
 
   if (broker->cur_client &&
       broker->cur_client->cur_len > 0)
     {
-      opc_broker_notify_frame (broker, broker->cur_client);
+      if (!broker->render_id)
+        broker->render_id = g_timeout_add (1000 / 60,
+                                           opc_broker_render_frame,
+                                           broker);
     }
 
   return TRUE;
@@ -375,7 +482,9 @@ opc_broker_run (OpcBroker    *broker,
                   G_IO_IN | G_IO_ERR | G_IO_HUP,
                   opc_broker_socket_accept, broker);
 
-  broker->timeout_id = g_timeout_add (10000, opc_broker_next_client, broker);
+  broker->client_check_id = g_timeout_add (1000,
+                                           opc_broker_check_client,
+                                           broker);
 
   return TRUE;
 }

@@ -178,6 +178,7 @@ opc_client_socket_recv (GIOChannel   *source,
           client->cur_len = client->in_len;
           client->in_len = 0;
           client->dump_len = 0;
+          client->timestamp = opc_get_current_time ();
           opc_broker_notify_frame (client->broker, client);
         }
     }

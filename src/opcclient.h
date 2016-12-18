@@ -30,6 +30,9 @@ struct _OpcClient
   guint8     *inbuf;
   gint        cur_len;
   guint8     *cur_frame;
+
+  gdouble     last_used;
+  gdouble     timestamp;
 };
 
 

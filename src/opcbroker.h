@@ -26,11 +26,12 @@ struct _OpcBroker
   gchar              *outbuf;
 
   guint               outhandler;
-  gboolean            out_needed;
 
+  gdouble             start_time;
   OpcClient          *cur_client;
-  OpcClient          *next_client;
-  guint               timeout_id;
+  OpcClient          *prev_client;
+  guint               render_id;
+  guint               client_check_id;
 
   GList              *clients;
 };

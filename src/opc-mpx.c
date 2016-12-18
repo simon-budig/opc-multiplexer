@@ -33,6 +33,16 @@ signal_term_handler (int sig)
 }
 
 
+gdouble
+opc_get_current_time ()
+{
+  struct timespec ts;
+
+  clock_gettime (CLOCK_MONOTONIC_RAW, &ts);
+  return (gdouble) ts.tv_sec + (gdouble) ts.tv_nsec / 1.0e9;
+}
+
+
 int
 main (int   argc,
       char *argv[])
