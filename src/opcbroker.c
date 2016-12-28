@@ -98,7 +98,7 @@ opc_broker_socket_open (OpcBroker    *broker,
   memset (&hints, 0, sizeof (hints));
   hints.ai_flags     = AI_PASSIVE;
   hints.ai_family    = AF_UNSPEC;
-  hints.ai_socktype  = SOCK_STREAM | SOCK_CLOEXEC;
+  hints.ai_socktype  = SOCK_STREAM;
 
   ret = getaddrinfo (NULL /* Hostname */, "7890" /* port */, &hints, &reslist);
 
@@ -110,6 +110,10 @@ opc_broker_socket_open (OpcBroker    *broker,
 
   for (res = reslist; res; res = res->ai_next)
     {
+      /* Check for ipv6 socket, on Linux this also accepts ipv4 */
+      if (res->ai_family != AF_INET6)
+        continue;
+
       fd = socket (res->ai_family, res->ai_socktype, res->ai_protocol);
 
       if (fd >= 0)
