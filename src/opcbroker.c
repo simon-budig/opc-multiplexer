@@ -19,7 +19,7 @@
 
 #define OPC_ERROR      (g_quark_from_static_string  ("opc-error-quark"))
 
-#define CLIENT_RUN_TIME        (10.0)
+#define CLIENT_RUN_TIME        (20.0)
 #define CLIENT_TRANSITION_TIME (2.0)
 #define ROUND(x) ((int) ((((x) < 0) ? (x) - 0.5 : (x) + 0.5)))
 
