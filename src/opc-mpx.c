@@ -55,12 +55,12 @@ main (int   argc,
 
   broker = opc_broker_new ();
 
-  if (!opc_broker_connect_target (broker,
-                                  "localhost:15163",
-                                  15163))
+  while (!opc_broker_connect_target (broker,
+                                     "localhost:15163",
+                                     15163))
     {
-      perror ("can't connect to target");
-      return -1;
+      perror ("can't connect to target, trying again in 5s");
+      sleep (5);
     }
 
   ret = opc_broker_run (broker,
