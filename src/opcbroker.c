@@ -92,15 +92,47 @@ opc_broker_socket_open (OpcBroker    *broker,
                         guint16       portno,
                         GError      **err)
 {
-  struct sockaddr_in sa;
+  struct addrinfo hints, *res, *reslist;
   int fd, flag, ret;
 
-  memset (&sa, 0, sizeof (sa));
-  sa.sin_family      = AF_INET;
-  sa.sin_port        = htons(portno);
-  sa.sin_addr.s_addr = INADDR_ANY;
+  memset (&hints, 0, sizeof (hints));
+  hints.ai_flags     = AI_PASSIVE;
+  hints.ai_family    = AF_UNSPEC;
+  hints.ai_socktype  = SOCK_STREAM | SOCK_CLOEXEC;
 
-  fd = socket (AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  ret = getaddrinfo (NULL /* Hostname */, "7890" /* port */, &hints, &reslist);
+
+  if (ret <0 )
+    {
+      fprintf (stderr, "getaddrinfo error: %s\n", gai_strerror (ret));
+      return -1;
+    }
+
+  for (res = reslist; res; res = res->ai_next)
+    {
+      fd = socket (res->ai_family, res->ai_socktype, res->ai_protocol);
+
+      if (fd >= 0)
+        {
+          flag = 1;
+#ifdef SO_REUSEPORT
+          setsockopt (fd, SOL_SOCKET, SO_REUSEPORT,
+                      (char*) &flag, sizeof (flag));
+#endif
+          setsockopt (fd, SOL_SOCKET, SO_REUSEADDR,
+                      (char*) &flag, sizeof (flag));
+
+          ret = bind (fd, res->ai_addr, res->ai_addrlen);
+          if (ret >= 0)
+            break;
+
+          close (fd);
+          fd = -1;
+        }
+    }
+
+  freeaddrinfo (reslist);
+
   if (fd < 0)
     {
       g_set_error_literal (err,
@@ -108,22 +140,6 @@ opc_broker_socket_open (OpcBroker    *broker,
                            "failed to create opc broker socket");
 
       return fd;
-    }
-
-  flag = 1;
-#ifdef SO_REUSEPORT
-  setsockopt (fd, SOL_SOCKET, SO_REUSEPORT, (char*) &flag, sizeof (flag));
-#endif
-  setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, (char*) &flag, sizeof (flag));
-
-  ret = bind (fd, (struct sockaddr *) &sa, sizeof (sa));
-  if (ret < 0)
-    {
-      g_set_error_literal (err,
-                           OPC_ERROR, 1000,
-                           "failed to bind to opc broker socket");
-      close (fd);
-      return ret;
     }
 
   ret = listen (fd, 20);
