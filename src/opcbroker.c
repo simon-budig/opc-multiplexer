@@ -442,10 +442,15 @@ opc_broker_cmp_client (gconstpointer a,
       return ac->cur_len - bc->cur_len;
     }
 
+  if (ac->is_connected != bc->is_connected)
+    {
+      return ac->is_connected ? -1 : 1;
+    }
+
   /* a preference for remote clients */
   if (ac->is_remote != bc->is_remote)
     {
-      return ac->is_remote ? 1 : -1;
+      return ac->is_remote ? -1 : 1;
     }
 
   if (ac->last_used < bc->last_used)

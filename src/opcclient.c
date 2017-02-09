@@ -88,6 +88,7 @@ opc_client_new (OpcBroker *broker,
   client->cur_frame = g_new (guint8, OPC_MESSAGE_LEN);
 
   client->is_remote = is_remote;
+  client->is_connected = TRUE;
 
   g_io_add_watch (client->gio, G_IO_IN | G_IO_ERR | G_IO_HUP,
                   opc_client_socket_recv, client);
@@ -112,6 +113,7 @@ opc_client_socket_recv (GIOChannel   *source,
       condition & G_IO_NVAL)
     {
       g_printerr ("GIO error condition\n");
+      client->is_connected = FALSE;
       g_object_unref (client);
       return FALSE;
     }
@@ -148,6 +150,7 @@ opc_client_socket_recv (GIOChannel   *source,
   if (ret == 0)
     {
       g_printerr ("empty recv - shutting down client %p.\n", client);
+      client->is_connected = FALSE;
       g_object_unref (client);
       return FALSE;
     }

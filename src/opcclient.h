@@ -32,6 +32,7 @@ struct _OpcClient
   guint8     *cur_frame;
 
   gboolean    is_remote;
+  gboolean    is_connected;
   gdouble     last_used;
   gdouble     timestamp;
 };
