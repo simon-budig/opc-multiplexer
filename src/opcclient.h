@@ -31,6 +31,7 @@ struct _OpcClient
   gint        cur_len;
   guint8     *cur_frame;
 
+  gboolean    is_remote;
   gdouble     last_used;
   gdouble     timestamp;
 };
@@ -39,6 +40,7 @@ struct _OpcClient
 GType        opc_client_get_type       (void) G_GNUC_CONST;
 
 OpcClient *  opc_client_new            (OpcBroker *broker,
+                                        gboolean   is_remote,
                                         gint       fd);
 
 #endif  /*  __OPC_CLIENT_H__  */

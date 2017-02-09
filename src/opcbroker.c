@@ -193,19 +193,30 @@ opc_broker_socket_accept (GIOChannel   *source,
 {
   OpcBroker *broker = data;
   socklen_t len;
-  struct sockaddr_in sa;
+  struct sockaddr_in6 sa_client, sa_local;
   OpcClient *client;
   int fd;
+  gboolean is_remote = TRUE;
 
-  len = sizeof (sa);
+  len = sizeof (sa_client);
   fd = accept (g_io_channel_unix_get_fd (source),
-               (struct sockaddr *) &sa, &len);
+               (struct sockaddr *) &sa_client, &len);
 
   if (fd < 0)
     return TRUE;   /* accept failed, we need to continue watching though */
 
-  client = opc_client_new (broker, fd);
-  g_printerr ("new client: %p\n", client);
+  /* check if this is a local client with lower priority */
+  len = sizeof (sa_local);
+  if (getsockname (fd, (struct sockaddr *) &sa_local, &len) == 0 &&
+      memcmp ((char *) &sa_client.sin6_addr,
+              (char *) &sa_local.sin6_addr,
+              sizeof (struct in6_addr)) == 0)
+    {
+      is_remote = FALSE;
+    }
+
+  client = opc_client_new (broker, is_remote, fd);
+  g_printerr ("new %s client: %p\n", is_remote ? "remote" : "local", client);
 
   g_object_weak_ref (G_OBJECT (client), opc_broker_release_client, broker);
 
@@ -429,6 +440,12 @@ opc_broker_cmp_client (gconstpointer a,
   if (ac->cur_len == 0 || bc->cur_len == 0)
     {
       return ac->cur_len - bc->cur_len;
+    }
+
+  /* a preference for remote clients */
+  if (ac->is_remote != bc->is_remote)
+    {
+      return ac->is_remote ? 1 : -1;
     }
 
   if (ac->last_used < bc->last_used)

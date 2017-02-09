@@ -71,6 +71,7 @@ opc_client_finalize (GObject *object)
  **/
 OpcClient *
 opc_client_new (OpcBroker *broker,
+                gboolean   is_remote,
                 gint       fd)
 {
   OpcClient *client;
@@ -85,6 +86,8 @@ opc_client_new (OpcBroker *broker,
   client->inbuf = g_new (guint8, OPC_MESSAGE_LEN);
   client->cur_len = 0;
   client->cur_frame = g_new (guint8, OPC_MESSAGE_LEN);
+
+  client->is_remote = is_remote;
 
   g_io_add_watch (client->gio, G_IO_IN | G_IO_ERR | G_IO_HUP,
                   opc_client_socket_recv, client);
