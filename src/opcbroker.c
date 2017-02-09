@@ -118,13 +118,18 @@ opc_broker_socket_open (OpcBroker    *broker,
 
       if (fd >= 0)
         {
+          flag = 0;
+#ifdef IPV6_V6ONLY
+          setsockopt (fd, IPPROTO_IPV6, IPV6_V6ONLY,
+                      (void *) &flag, sizeof (flag));
+#endif
           flag = 1;
 #ifdef SO_REUSEPORT
           setsockopt (fd, SOL_SOCKET, SO_REUSEPORT,
-                      (char*) &flag, sizeof (flag));
+                      (void *) &flag, sizeof (flag));
 #endif
           setsockopt (fd, SOL_SOCKET, SO_REUSEADDR,
-                      (char*) &flag, sizeof (flag));
+                      (void *) &flag, sizeof (flag));
 
           ret = bind (fd, res->ai_addr, res->ai_addrlen);
           if (ret >= 0)
