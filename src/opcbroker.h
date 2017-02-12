@@ -20,6 +20,7 @@ struct _OpcBroker
   gint                port_number;
   GIOChannel         *sock_io;
 
+  gint                num_pixels;
   gint                num_channels;
   gint                out_pos;
   gint                out_len;
@@ -32,6 +33,9 @@ struct _OpcBroker
   OpcClient          *prev_client;
   guint               render_id;
   guint               client_check_id;
+
+  guint               overlay_len;
+  gdouble            *overlay;
 
   GList              *clients;
 };
@@ -47,7 +51,7 @@ struct _OpcBrokerClass
 
 GType        opc_broker_get_type       (void) G_GNUC_CONST;
 
-OpcBroker *  opc_broker_new            (void);
+OpcBroker *  opc_broker_new            (gint          num_pixels);
 gboolean     opc_broker_connect_target (OpcBroker    *broker,
                                         gchar        *hostname,
                                         guint16       port);

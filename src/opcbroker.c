@@ -73,13 +73,14 @@ opc_broker_finalize (GObject *object)
  * Returns: A new #OpcBroker.
  **/
 OpcBroker *
-opc_broker_new (void)
+opc_broker_new (gint num_pixels)
 {
   OpcBroker *broker;
 
   broker = g_object_new (OPC_TYPE_BROKER, NULL);
 
-  broker->outbuf = g_new (guint8, 4 + 512 * 3);
+  broker->num_pixels = num_pixels;
+  broker->outbuf = g_new (guint8, 4 + num_pixels * 3);
   broker->out_len = 0;
   broker->out_pos = 0;
 
@@ -215,7 +216,7 @@ opc_broker_socket_accept (GIOChannel   *source,
       is_remote = FALSE;
     }
 
-  client = opc_client_new (broker, is_remote, fd);
+  client = opc_client_new (broker, is_remote, broker->num_pixels, fd);
   g_printerr ("new %s client: %p\n", is_remote ? "remote" : "local", client);
 
   g_object_weak_ref (G_OBJECT (client), opc_broker_release_client, broker);
@@ -283,44 +284,68 @@ opc_broker_render_frame (void *user_data)
   if (now - broker->start_time < CLIENT_TRANSITION_TIME)
     {
       gdouble alpha;
-      gint i;
+      gint i, j;
 
-      if (prev)
-        broker->out_len = MAX (prev->cur_len, cur->cur_len);
-      else
-        broker->out_len = cur->cur_len;
-
-      broker->out_len = MIN (broker->out_len, 4 + 3 * 512);
+      broker->out_len = broker->num_pixels * 3 + 4;
 
       /* copy the channel + command from first client. This is somewhat dodgy */
-      broker->outbuf[0] = cur->cur_frame[0];
-      broker->outbuf[1] = cur->cur_frame[1];
+      broker->outbuf[0] = 0;  /* channel */
+      broker->outbuf[1] = 0;  /* command */
       broker->outbuf[2] = (broker->out_len - 4) / 256;
       broker->outbuf[3] = (broker->out_len - 4) % 256;
 
       alpha = (now - broker->start_time) / CLIENT_TRANSITION_TIME;
 
-      for (i = 4; i < broker->out_len; i++)
+      for (i = 0; i < broker->num_pixels; i++)
         {
-          gdouble val = 0.0;
+          for (j = 0; j < 3; j++)
+            {
+              gdouble val = 0.0;
 
-          if (prev && i < prev->cur_len)
-            val += prev->cur_frame[i] * (1.0 - alpha);
+              if (prev && i < prev->num_pixels)
+                {
+                  gdouble pa = prev->cur_frame_rgba[i*4 + 3];
+                  val += prev->cur_frame_rgba[i*4 + j] * pa * (1.0 - alpha);
+                }
 
-          if (i < cur->cur_len)
-            val += cur->cur_frame[i] * alpha;
+              if (i < cur->num_pixels)
+                {
+                  gdouble na = cur->cur_frame_rgba[i*4 + 3];
+                  val += cur->cur_frame_rgba[i*4 + j] * na * alpha;
+                }
 
-          broker->outbuf[i] = CLAMP (ROUND (val), 0, 255);
+              broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val, 0.0, 1.0) * 255.0);
+            }
         }
 
       ret = G_SOURCE_CONTINUE;
     }
   else
     {
-      broker->out_len = MIN (cur->cur_len, 4 + 3 * 512);
-      memcpy (broker->outbuf, cur->cur_frame, broker->out_len);
+      gint i, j;
+
+      broker->out_len = broker->num_pixels * 3 + 4;
+
+      broker->outbuf[0] = 0;  /* channel */
+      broker->outbuf[1] = 0;  /* command */
       broker->outbuf[2] = (broker->out_len - 4) / 256;
       broker->outbuf[3] = (broker->out_len - 4) % 256;
+
+      for (i = 0; i < broker->num_pixels; i++)
+        {
+          for (j = 0; j < 3; j++)
+            {
+              gdouble val = 0.0;
+
+              if (i < cur->num_pixels)
+                {
+                  gdouble na = cur->cur_frame_rgba[i*4 + 3];
+                  val += cur->cur_frame_rgba[i*4 + j] * na;
+                }
+
+              broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val, 0.0, 1.0) * 255.0);
+            }
+        }
 
       ret = G_SOURCE_REMOVE;
     }
@@ -437,9 +462,9 @@ opc_broker_cmp_client (gconstpointer a,
   OpcClient *ac = OPC_CLIENT (a);
   OpcClient *bc = OPC_CLIENT (b);
 
-  if (ac->cur_len == 0 || bc->cur_len == 0)
+  if (ac->num_pixels == 0 || bc->num_pixels == 0)
     {
-      return ac->cur_len - bc->cur_len;
+      return ac->num_pixels - bc->num_pixels;
     }
 
   if (ac->is_connected != bc->is_connected)
@@ -502,7 +527,7 @@ opc_broker_check_client (gpointer user_data)
     }
 
   if (broker->cur_client &&
-      broker->cur_client->cur_len > 0)
+      broker->cur_client->num_pixels > 0)
     {
       if (!broker->render_id)
         broker->render_id = g_timeout_add (1000 / 60,

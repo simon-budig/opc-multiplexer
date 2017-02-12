@@ -53,7 +53,7 @@ main (int   argc,
   if (argc > 1 && !strcmp (argv[1], "--debug"))
     verbosity_level = 2;
 
-  broker = opc_broker_new ();
+  broker = opc_broker_new (512);
 
   while (!opc_broker_connect_target (broker,
                                      "localhost:15163",

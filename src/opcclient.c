@@ -58,7 +58,7 @@ opc_client_finalize (GObject *object)
     g_io_channel_unref (client->gio);
 
   g_free (client->inbuf);
-  g_free (client->cur_frame);
+  g_free (client->cur_frame_rgba);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -72,6 +72,7 @@ opc_client_finalize (GObject *object)
 OpcClient *
 opc_client_new (OpcBroker *broker,
                 gboolean   is_remote,
+                gint       num_pixels,
                 gint       fd)
 {
   OpcClient *client;
@@ -84,8 +85,8 @@ opc_client_new (OpcBroker *broker,
   client->dump_len = 0;
   client->in_len = 0;
   client->inbuf = g_new (guint8, OPC_MESSAGE_LEN);
-  client->cur_len = 0;
-  client->cur_frame = g_new (guint8, OPC_MESSAGE_LEN);
+  client->num_pixels = num_pixels;
+  client->cur_frame_rgba = g_new0 (gfloat, num_pixels * 4);
 
   client->is_remote = is_remote;
   client->is_connected = TRUE;
@@ -177,11 +178,18 @@ opc_client_socket_recv (GIOChannel   *source,
 
       if (client->in_len + client->dump_len == total_len)
         {
-          guint8 *tmp;
-          tmp = client->cur_frame;
-          client->cur_frame = client->inbuf;
-          client->inbuf = tmp;
-          client->cur_len = client->in_len;
+          gint i;
+
+          for (i = 0; i < client->num_pixels; i++)
+            {
+              if (i * 3 >= client->in_len - 4)
+                break;
+
+              client->cur_frame_rgba[i*4 + 0] = client->inbuf[4 + i*3 + 0] / 255.0f;
+              client->cur_frame_rgba[i*4 + 1] = client->inbuf[4 + i*3 + 1] / 255.0f;
+              client->cur_frame_rgba[i*4 + 2] = client->inbuf[4 + i*3 + 2] / 255.0f;
+              client->cur_frame_rgba[i*4 + 3] = 1.0f;
+            }
           client->in_len = 0;
           client->dump_len = 0;
           client->timestamp = opc_get_current_time ();

@@ -28,8 +28,8 @@ struct _OpcClient
   gint        dump_len;
   gint        in_len;
   guint8     *inbuf;
-  gint        cur_len;
-  guint8     *cur_frame;
+  gint        num_pixels;
+  gfloat     *cur_frame_rgba;
 
   gboolean    is_remote;
   gboolean    is_connected;
@@ -42,6 +42,7 @@ GType        opc_client_get_type       (void) G_GNUC_CONST;
 
 OpcClient *  opc_client_new            (OpcBroker *broker,
                                         gboolean   is_remote,
+                                        gint       num_pixels,
                                         gint       fd);
 
 #endif  /*  __OPC_CLIENT_H__  */
