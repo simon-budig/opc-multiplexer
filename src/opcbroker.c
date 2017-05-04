@@ -386,8 +386,8 @@ opc_broker_connect_target (OpcBroker *broker,
                            gchar     *hostport,
                            guint16    default_port)
 {
+  struct addrinfo *addr, *info;
   gchar *host, *colon;
-  gint port;
   gint success = 0;
   gint flag;
 
@@ -395,47 +395,51 @@ opc_broker_connect_target (OpcBroker *broker,
 
   host = g_strdup (hostport);
   colon = strchr (host, ':');
-  port = default_port;
+  /* check for ipv6 */
+  if (strrchr (host, ':') != colon)
+    colon = NULL;
 
   if (colon)
     {
       *colon = '\0';
-      port = g_ascii_strtoll (colon + 1, NULL, 10);
     }
 
-  if (port)
-    {
-      struct addrinfo *addr, *i;
-      getaddrinfo (*host ? host : "localhost", 0, 0, &addr);
+  g_printerr ("host: %s, port: %s\n", *host ? host : "127.0.0.1", colon ? colon + 1 : "15163");
 
-      for (i = addr; i; i = i->ai_next)
+  getaddrinfo (*host ? host : "localhost", colon ? colon + 1 : "15163",
+               0, &addr);
+
+  for (info = addr; info; info = info->ai_next)
+    {
+      broker->target_fd = socket (info->ai_family,
+                                  info->ai_socktype,
+                                  info->ai_protocol);
+      g_printerr ("family: %d, socktype: %d, protocol: %d\n",
+                  info->ai_family, info->ai_socktype, info->ai_protocol);
+
+      if (broker->target_fd >= 0)
         {
-          if (i->ai_family == PF_INET)
+          if (connect (broker->target_fd,
+                       info->ai_addr,
+                       info->ai_addrlen) < 0)
             {
-              memcpy (&broker->target_address,
-                      i->ai_addr, sizeof (broker->target_address));
-              broker->target_address.sin_port = htons (port);
-              success = 1;
+              perror ("connect");
+              close (broker->target_fd);
+              broker->target_fd = -1;
+            }
+          else
+            {
+              g_printerr ("connect successful\n");
               break;
             }
         }
-
-      freeaddrinfo (addr);
     }
 
+  freeaddrinfo (addr);
   g_free (host);
 
-  if (!success)
-    return FALSE;
-
-  broker->target_fd = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-  if (connect (broker->target_fd,
-               (struct sockaddr *) &broker->target_address,
-               sizeof (broker->target_address)) < 0)
+  if (broker->target_fd < 0)
     {
-      close (broker->target_fd);
-      g_printerr ("connect failed\n");
       return FALSE;
     }
 
