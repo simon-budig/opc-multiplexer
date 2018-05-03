@@ -389,6 +389,7 @@ opc_broker_connect_target (OpcBroker *broker,
                            guint16    default_port)
 {
   struct addrinfo *addr, *info;
+  struct addrinfo wish = { 0, 0, SOCK_STREAM, 0, 0, NULL, NULL, NULL };
   gchar *host, *colon;
   gint success = 0;
   gint flag;
@@ -409,7 +410,7 @@ opc_broker_connect_target (OpcBroker *broker,
   g_printerr ("host: %s, port: %s\n", *host ? host : "127.0.0.1", colon ? colon + 1 : "15163");
 
   getaddrinfo (*host ? host : "localhost", colon ? colon + 1 : "15163",
-               0, &addr);
+               &wish, &addr);
 
   for (info = addr; info; info = info->ai_next)
     {
