@@ -1,5 +1,7 @@
 bin_PROGRAMS = opc-mpx
 opc_mpx_SOURCES =   \
+	gmqtt-source.c  \
+	gmqtt-client.c  \
 	opc-mpx.c   \
 	opc-types.h \
 	opcbroker.c \

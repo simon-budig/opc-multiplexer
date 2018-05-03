@@ -31,6 +31,7 @@ struct _OpcClient
   gint        num_pixels;
   gfloat     *cur_frame_rgba;
 
+  gboolean    is_enabled;
   gboolean    is_remote;
   gboolean    is_connected;
   gdouble     last_used;

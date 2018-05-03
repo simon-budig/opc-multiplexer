@@ -20,6 +20,7 @@ struct _OpcBroker
   gint                port_number;
   GIOChannel         *sock_io;
 
+  gdouble             global_brightness;
   gint                num_pixels;
   gint                num_channels;
   gint                out_pos;
@@ -33,9 +34,6 @@ struct _OpcBroker
   OpcClient          *prev_client;
   guint               render_id;
   guint               client_check_id;
-
-  guint               overlay_len;
-  gdouble            *overlay;
 
   GList              *clients;
 };

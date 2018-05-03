@@ -16,8 +16,11 @@
 #include <glib.h>
 #include <glib-object.h>
 
+#include <mosquitto.h>
+
 #include "opc-types.h"
 
+#include "gmqtt-client.h"
 #include "opcbroker.h"
 
 int verbosity_level = 0;
@@ -43,11 +46,32 @@ opc_get_current_time ()
 }
 
 
+static void
+mqtt_message_received_brightness_callback (GMqttClient              *client,
+                                           struct mosquitto_message *msg,
+                                           gpointer                  user_data)
+{
+  OpcBroker *broker = OPC_BROKER (user_data);
+  gchar *payload = g_new0 (gchar, msg->payloadlen + 1);
+  gdouble brightness;
+
+  memcpy (payload, msg->payload, msg->payloadlen);
+
+  brightness = g_ascii_strtod (payload, NULL);
+  g_free (payload);
+
+  broker->global_brightness = CLAMP (brightness / 100.0, 0.0, 1.0);
+
+  g_printerr ("mosqutto-message: %s: %s\n", msg->topic, msg->payload);
+}
+
+
 int
 main (int   argc,
       char *argv[])
 {
   OpcBroker *broker;
+  GMqttClient *gmqtt;
   int ret;
 
   if (argc > 1 && !strcmp (argv[1], "--debug"))
@@ -69,6 +93,19 @@ main (int   argc,
 
   if (ret < 0)
     perror ("opc-mpx run");
+
+  gmqtt = gmqtt_client_new_with_will ("balldachin",
+                                      "mqtt.hasi", 1883,
+                                      "hasi/lights/balldachin/online",
+                                      "false", -1);
+
+  g_signal_connect (gmqtt, "message-received::brightness",
+                    G_CALLBACK (mqtt_message_received_brightness_callback),
+                    broker);
+
+  gmqtt_client_subscribe_full (gmqtt, "brightness",
+                               "hasi/lights/balldachin/brightness", QOS_1);
+
 
   /* mainloop */
 

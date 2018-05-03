@@ -84,6 +84,8 @@ opc_broker_new (gint num_pixels)
   broker->out_len = 0;
   broker->out_pos = 0;
 
+  broker->global_brightness = 1.0;
+
   return broker;
 }
 
@@ -314,7 +316,7 @@ opc_broker_render_frame (void *user_data)
                   val += cur->cur_frame_rgba[i*4 + j] * na * alpha;
                 }
 
-              broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val, 0.0, 1.0) * 255.0);
+              broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val * broker->global_brightness, 0.0, 1.0) * 255.0);
             }
         }
 
@@ -343,7 +345,7 @@ opc_broker_render_frame (void *user_data)
                   val += cur->cur_frame_rgba[i*4 + j] * na;
                 }
 
-              broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val, 0.0, 1.0) * 255.0);
+              broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val * broker->global_brightness, 0.0, 1.0) * 255.0);
             }
         }
 
@@ -469,6 +471,11 @@ opc_broker_cmp_client (gconstpointer a,
   if (ac->num_pixels == 0 || bc->num_pixels == 0)
     {
       return ac->num_pixels - bc->num_pixels;
+    }
+
+  if (ac->is_enabled != bc->is_enabled)
+    {
+      return ac->is_enabled ? -1 : 1;
     }
 
   if (ac->is_connected != bc->is_connected)

@@ -3,6 +3,7 @@
 
 typedef struct _OpcBroker       OpcBroker;
 typedef struct _OpcClient       OpcClient;
+typedef struct _GMqttClient     GMqttClient;
 
 gdouble opc_get_current_time (void);
 

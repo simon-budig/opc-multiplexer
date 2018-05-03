@@ -88,6 +88,7 @@ opc_client_new (OpcBroker *broker,
   client->num_pixels = num_pixels;
   client->cur_frame_rgba = g_new0 (gfloat, num_pixels * 4);
 
+  client->is_enabled = TRUE;
   client->is_remote = is_remote;
   client->is_connected = TRUE;
 
