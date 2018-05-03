@@ -106,6 +106,7 @@ main (int   argc,
   gmqtt_client_subscribe_full (gmqtt, "brightness",
                                "hasi/lights/balldachin/brightness", QOS_1);
 
+  gmqtt_client_publish (gmqtt, "hasi/lights/balldachin/online", "true", -1);
 
   /* mainloop */
 
