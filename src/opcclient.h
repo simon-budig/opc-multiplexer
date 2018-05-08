@@ -14,28 +14,18 @@ typedef struct _OpcClientClass  OpcClientClass;
 
 struct _OpcClientClass
 {
-  GObjectClass  parent_class;
+  PxSourceClass  parent_class;
 };
 
 
 struct _OpcClient
 {
-  GObject     parent_instance;
-  OpcBroker  *broker;
-  gint        max_channels;
+  PxSource    parent_instance;
 
   GIOChannel *gio;
   gint        dump_len;
   gint        in_len;
   guint8     *inbuf;
-  gint        num_pixels;
-  gfloat     *cur_frame_rgba;
-
-  gboolean    is_enabled;
-  gboolean    is_remote;
-  gboolean    is_connected;
-  gdouble     last_used;
-  gdouble     timestamp;
 };
 
 

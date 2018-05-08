@@ -20,9 +20,9 @@ struct _OpcBroker
   gint                port_number;
   GIOChannel         *sock_io;
 
+  PxSource           *overlay_pxsource;
   gdouble             global_brightness;
   gint                num_pixels;
-  gint                num_channels;
   gint                out_pos;
   gint                out_len;
   gchar              *outbuf;
@@ -30,12 +30,12 @@ struct _OpcBroker
   guint               outhandler;
 
   gdouble             start_time;
-  OpcClient          *cur_client;
-  OpcClient          *prev_client;
+  PxSource           *cur_pxsource;
+  PxSource           *prev_pxsource;
   guint               render_id;
-  guint               client_check_id;
+  guint               pxsource_check_id;
 
-  GList              *clients;
+  GList              *pxsources;
 };
 
 struct _OpcBrokerClass
@@ -57,7 +57,7 @@ gboolean     opc_broker_run            (OpcBroker    *broker,
                                         guint16       port,
                                         GError      **err);
 void         opc_broker_notify_frame   (OpcBroker    *broker,
-                                        OpcClient    *client);
+                                        PxSource     *pxs);
 
 
 #endif  /*  __OPC_BROKER_H__  */

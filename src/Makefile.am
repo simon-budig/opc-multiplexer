@@ -1,5 +1,7 @@
 bin_PROGRAMS = opc-mpx
 opc_mpx_SOURCES =   \
+	artnetnode.c \
+	artnetnode.h \
 	gmqtt-source.c  \
 	gmqtt-client.c  \
 	opc-mpx.c   \
@@ -7,7 +9,9 @@ opc_mpx_SOURCES =   \
 	opcbroker.c \
 	opcbroker.h \
 	opcclient.c \
-	opcclient.h
+	opcclient.h \
+	pxsource.c \
+	pxsource.h
 
 AM_CPPFLAGS =             \
 	-D_GNU_SOURCE     \

@@ -22,6 +22,8 @@
 
 #include "gmqtt-client.h"
 #include "opcbroker.h"
+#include "pxsource.h"
+#include "artnetnode.h"
 
 int verbosity_level = 0;
 static GMainLoop *mainloop = NULL;
@@ -78,6 +80,8 @@ main (int   argc,
     verbosity_level = 2;
 
   broker = opc_broker_new (512);
+
+  broker->overlay_pxsource = PX_SOURCE (artnet_node_new (broker, FALSE, 512));
 
   while (!opc_broker_connect_target (broker,
                                      "127.0.0.1:15163",

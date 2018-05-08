@@ -14,6 +14,8 @@
 
 #include "opc-types.h"
 
+#include "pxsource.h"
+#include "pxsource.h"
 #include "opcclient.h"
 #include "opcbroker.h"
 
@@ -30,8 +32,8 @@ enum
 
 // static guint opc_broker_signals[LAST_SIGNAL] = { 0 };
 
-static void      opc_broker_finalize     (GObject  *object);
-static gboolean  opc_broker_check_client (gpointer  user_data);
+static void      opc_broker_finalize       (GObject  *object);
+static gboolean  opc_broker_check_pxsource (gpointer  user_data);
 
 G_DEFINE_TYPE (OpcBroker, opc_broker, G_TYPE_OBJECT)
 
@@ -50,7 +52,7 @@ opc_broker_class_init (OpcBrokerClass *klass)
 static void
 opc_broker_init (OpcBroker *broker)
 {
-  broker->clients = NULL;
+  broker->pxsources = NULL;
 }
 
 
@@ -61,7 +63,7 @@ opc_broker_finalize (GObject *object)
 
   if (broker->sock_io != NULL)
     g_io_channel_unref (broker->sock_io);
-  g_list_free (broker->clients);
+  g_list_free (broker->pxsources);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -172,20 +174,20 @@ opc_broker_socket_open (OpcBroker    *broker,
 
 
 static void
-opc_broker_release_client (gpointer  user_data,
-                           GObject  *stale_client)
+opc_broker_release_pxsource (gpointer  user_data,
+                             GObject  *stale_pxsource)
 {
   OpcBroker *broker = OPC_BROKER (user_data);
 
-  g_printerr ("releasing client %p\n", stale_client);
+  g_printerr ("releasing pxsource %p\n", stale_pxsource);
 
-  if (broker->cur_client == (OpcClient *) stale_client)
-    broker->cur_client = NULL;
+  if (broker->cur_pxsource == (PxSource *) stale_pxsource)
+    broker->cur_pxsource = NULL;
 
-  if (broker->prev_client == (OpcClient *) stale_client)
-    broker->prev_client = NULL;
+  if (broker->prev_pxsource == (PxSource *) stale_pxsource)
+    broker->prev_pxsource = NULL;
 
-  broker->clients = g_list_remove_all (broker->clients, stale_client);
+  broker->pxsources = g_list_remove_all (broker->pxsources, stale_pxsource);
 }
 
 
@@ -219,13 +221,13 @@ opc_broker_socket_accept (GIOChannel   *source,
     }
 
   client = opc_client_new (broker, is_remote, broker->num_pixels, fd);
-  g_printerr ("new %s client: %p\n", is_remote ? "remote" : "local", client);
+  g_printerr ("new %s OpcClient: %p\n", is_remote ? "remote" : "local", client);
 
-  g_object_weak_ref (G_OBJECT (client), opc_broker_release_client, broker);
+  g_object_weak_ref (G_OBJECT (client), opc_broker_release_pxsource, broker);
 
-  broker->clients = g_list_append (broker->clients, client);
+  broker->pxsources = g_list_append (broker->pxsources, client);
 
-  opc_broker_check_client (broker);
+  opc_broker_check_pxsource (broker);
 
   return TRUE;
 }
@@ -272,15 +274,19 @@ opc_broker_render_frame (void *user_data)
 {
   OpcBroker *broker = OPC_BROKER (user_data);
   gdouble now;
-  OpcClient *cur, *prev;
+  PxSource *cur, *prev, *over;
   gboolean ret;
 
   now = opc_get_current_time ();
 
-  cur = broker->cur_client;
-  prev = broker->prev_client;
+  cur = broker->cur_pxsource;
+  prev = broker->prev_pxsource;
+  over = broker->overlay_pxsource;
 
-  if (!cur)
+  if (!over->is_enabled)
+    over = NULL;
+
+  if (!cur && !over)
     return G_SOURCE_REMOVE;
 
   if (now - broker->start_time < CLIENT_TRANSITION_TIME)
@@ -310,10 +316,16 @@ opc_broker_render_frame (void *user_data)
                   val += prev->cur_frame_rgba[i*4 + j] * pa * (1.0 - alpha);
                 }
 
-              if (i < cur->num_pixels)
+              if (cur && i < cur->num_pixels)
                 {
                   gdouble na = cur->cur_frame_rgba[i*4 + 3];
                   val += cur->cur_frame_rgba[i*4 + j] * na * alpha;
+                }
+
+              if (over && i < over->num_pixels)
+                {
+                  gdouble oa = over->cur_frame_rgba[i*4 + 3];
+                  val = val * (1.0 - oa) + over->cur_frame_rgba[i*4 + j] * oa;
                 }
 
               broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val * broker->global_brightness, 0.0, 1.0) * 255.0);
@@ -339,10 +351,16 @@ opc_broker_render_frame (void *user_data)
             {
               gdouble val = 0.0;
 
-              if (i < cur->num_pixels)
+              if (cur && i < cur->num_pixels)
                 {
                   gdouble na = cur->cur_frame_rgba[i*4 + 3];
                   val += cur->cur_frame_rgba[i*4 + j] * na;
+                }
+
+              if (over && i < over->num_pixels)
+                {
+                  gdouble oa = over->cur_frame_rgba[i*4 + 3];
+                  val = val * (1.0 - oa) + over->cur_frame_rgba[i*4 + j] * oa;
                 }
 
               broker->outbuf[4 + i*3 + j] = ROUND (CLAMP (val * broker->global_brightness, 0.0, 1.0) * 255.0);
@@ -368,10 +386,11 @@ opc_broker_render_frame (void *user_data)
 
 void
 opc_broker_notify_frame (OpcBroker *broker,
-                         OpcClient *client)
+                         PxSource  *pxsource)
 {
-  if (client != broker->cur_client &&
-      client != broker->prev_client)
+  if (pxsource != broker->overlay_pxsource &&
+      pxsource != broker->cur_pxsource &&
+      pxsource != broker->prev_pxsource)
     {
       return;
     }
@@ -463,11 +482,11 @@ opc_broker_connect_target (OpcBroker *broker,
 
 
 static gint
-opc_broker_cmp_client (gconstpointer a,
-                       gconstpointer b)
+opc_broker_cmp_pxsource (gconstpointer a,
+                         gconstpointer b)
 {
-  OpcClient *ac = OPC_CLIENT (a);
-  OpcClient *bc = OPC_CLIENT (b);
+  PxSource *ac = PX_SOURCE (a);
+  PxSource *bc = PX_SOURCE (b);
 
   if (ac->num_pixels == 0 || bc->num_pixels == 0)
     {
@@ -484,7 +503,7 @@ opc_broker_cmp_client (gconstpointer a,
       return ac->is_connected ? -1 : 1;
     }
 
-  /* a preference for remote clients */
+  /* a preference for remote pxsources */
   if (ac->is_remote != bc->is_remote)
     {
       return ac->is_remote ? -1 : 1;
@@ -498,48 +517,48 @@ opc_broker_cmp_client (gconstpointer a,
 
 
 static gboolean
-opc_broker_check_client (gpointer user_data)
+opc_broker_check_pxsource (gpointer user_data)
 {
   OpcBroker *broker = OPC_BROKER (user_data);
-  OpcClient *client = NULL;
+  PxSource  *pxsource = NULL;
   GList *l;
   gdouble now;
 
   now = opc_get_current_time ();
 
-  /* check if the current client still is within its time slot */
+  /* check if the current pxsource still is within its time slot */
   if (now - broker->start_time < CLIENT_RUN_TIME)
     {
-      if (broker->cur_client)
-        broker->cur_client->last_used = now;
+      if (broker->cur_pxsource)
+        broker->cur_pxsource->last_used = now;
 
       return TRUE;
     }
 
-  if (broker->prev_client)
+  if (broker->prev_pxsource)
     {
-      g_object_unref (broker->prev_client);
-      broker->prev_client = NULL;
+      g_object_unref (broker->prev_pxsource);
+      broker->prev_pxsource = NULL;
     }
 
-  broker->clients = g_list_sort (broker->clients,
-                                 opc_broker_cmp_client);
+  broker->pxsources = g_list_sort (broker->pxsources,
+                                   opc_broker_cmp_pxsource);
 
-  /* find a new client */
+  /* find a new pxsource */
 
-  client = broker->clients ? broker->clients->data : NULL;
+  pxsource = broker->pxsources ? broker->pxsources->data : NULL;
 
-  if (client)
+  if (pxsource)
     {
-      broker->prev_client = broker->cur_client;
-      broker->cur_client = client;
-      g_object_ref (broker->cur_client);
+      broker->prev_pxsource = broker->cur_pxsource;
+      broker->cur_pxsource = pxsource;
+      g_object_ref (broker->cur_pxsource);
       broker->start_time = now;
-      broker->cur_client->last_used = now;
+      broker->cur_pxsource->last_used = now;
     }
 
-  if (broker->cur_client &&
-      broker->cur_client->num_pixels > 0)
+  if (broker->cur_pxsource &&
+      broker->cur_pxsource->num_pixels > 0)
     {
       if (!broker->render_id)
         broker->render_id = g_timeout_add (1000 / 60,
@@ -566,9 +585,9 @@ opc_broker_run (OpcBroker    *broker,
                   G_IO_IN | G_IO_ERR | G_IO_HUP,
                   opc_broker_socket_accept, broker);
 
-  broker->client_check_id = g_timeout_add (1000,
-                                           opc_broker_check_client,
-                                           broker);
+  broker->pxsource_check_id = g_timeout_add (1000,
+                                             opc_broker_check_pxsource,
+                                             broker);
 
   return TRUE;
 }
