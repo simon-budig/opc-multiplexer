@@ -1,10 +1,13 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <error.h>
 
 #include <glib-object.h>
 
@@ -18,9 +21,8 @@ static gboolean   artnet_node_socket_recv (GIOChannel   *source,
                                            GIOCondition  condition,
                                            gpointer      data);
 
-// bogus
-#define ARTNET_MESSAGE_LEN (512*3+12)
-#define GET_ARTNET_FRAME_LEN(buf, len) ((len) >= 4 ? (buf)[2] * 256 + (buf)[3] : -1)
+#define ARTNET_MESSAGE_LEN (18 + 512 + 1)
+
 enum
 {
   LAST_SIGNAL
@@ -71,7 +73,9 @@ artnet_node_open_socket (void)
   hints.ai_family    = AF_UNSPEC;
   hints.ai_socktype  = SOCK_DGRAM;
 
-  ret = getaddrinfo (NULL /* Hostname */, "6454" /* port */, &hints, &reslist);
+  ret = getaddrinfo (NULL, /* Hostname */
+                     "6454" /* port */,
+                     &hints, &reslist);
 
   if (ret <0 )
     {
@@ -100,6 +104,13 @@ artnet_node_open_socket (void)
                       (void *) &flag, sizeof (flag));
 #endif
           setsockopt (fd, SOL_SOCKET, SO_REUSEADDR,
+                      (void *) &flag, sizeof (flag));
+
+          setsockopt (fd, SOL_SOCKET, SO_BROADCAST,
+                      (void *) &flag, sizeof (flag));
+
+          flag = 0;
+          setsockopt (fd, IPPROTO_IP, IP_MULTICAST_LOOP,
                       (void *) &flag, sizeof (flag));
 
           ret = bind (fd, res->ai_addr, res->ai_addrlen);
@@ -146,9 +157,7 @@ artnet_node_new (OpcBroker *broker,
 
   client->gio = g_io_channel_unix_new (fd);
   g_io_channel_set_close_on_unref (client->gio, TRUE);
-  client->dump_len = 0;
-  client->in_len = 0;
-  client->inbuf = g_new (guint8, ARTNET_MESSAGE_LEN);
+  client->inbuf = g_new0 (guint8, ARTNET_MESSAGE_LEN);
 
   g_io_add_watch (client->gio, G_IO_IN | G_IO_ERR | G_IO_HUP,
                   artnet_node_socket_recv, client);
@@ -158,15 +167,81 @@ artnet_node_new (OpcBroker *broker,
 
 
 static gboolean
+artnet_node_send_poll_reply (GIOChannel   *source,
+                             GIOCondition  condition,
+                             gpointer      data)
+{
+  ArtnetNode *client = ARTNET_NODE (data);
+  struct sockaddr_in dest_addr;
+  gint fd, ret;
+  guint8 pollreply[] =
+    "Art-Net\x00"       // header
+    "\x00\x21"          // opcode 0x2100
+    "\xc0\xa8\x02\xb7"  // IP-Addr.
+    "\x36\x19"          // PortNr. 0x1936
+    "\x00\x00\x00\x00"  // Version, NetSwitch, SubSwitch
+    "\x00\x00"          // OEM-Info
+    "\x00"              // UBEA-Version
+    "\xd2"              // Status-Code
+    "\xf0\x7f"          // ESTA-Code
+
+    // short name
+    "OPC-Multiplexer\x00\x00\x00"
+
+    // long name
+    "OPC-Multiplexer\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+    // node status report
+    "\x23\x30\x30\x30\x31\x20\x5b\x31\x5d\x20\x4f\x4c\x41\x00\x00\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+    "\x00\x04"           // Number of Ports
+    "\xc0\xc0\xc0\xc0"   // Port types
+
+    "\x00\x00\x00\x00"   // Input Status
+    "\x00\x00\x00\x00"   // Output Status
+
+    "\x01\x02\x03\x04"   // Input SubSwitch
+    "\x00\x00\x00\x00"   // Output SubSwitch
+    "\x00\x00\x00\x00\x00\x00"  // SwVideo, SwMacro, SwRemote, spare[3]...
+    "\x00"                      // Style
+    "\x18\x5e\x0f\x20\x64\x3a"  // MAC
+    "\xc0\xa8\x02\xb7"          // IP
+    "\x00"                      // Bind-Index
+    "\x08"                      // Status
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
+  fd = g_io_channel_unix_get_fd (source);
+
+  dest_addr.sin_family = AF_INET;
+  dest_addr.sin_port = htons (6454);
+  dest_addr.sin_addr.s_addr = htonl (0xc0a802ff);
+  ret = sendto (fd, pollreply, sizeof (pollreply) - 1, 0,
+                &dest_addr, sizeof (dest_addr));
+  if (ret < 0)
+    perror ("sendto");
+
+  return FALSE;
+}
+
+
+static gboolean
 artnet_node_socket_recv (GIOChannel   *source,
                         GIOCondition  condition,
                         gpointer      data)
 {
-  static gchar dump_buffer[ARTNET_MESSAGE_LEN];
   ArtnetNode *client = ARTNET_NODE (data);
+  gint opcode, protocol;
   gchar *c;
   ssize_t ret;
-  gint total_len = 0;
+  struct sockaddr controller_addr;
+  socklen_t len;
 
   if (condition & G_IO_ERR ||
       condition & G_IO_HUP ||
@@ -178,40 +253,16 @@ artnet_node_socket_recv (GIOChannel   *source,
       return FALSE;
     }
 
-  /* the following value is only used if we have >= 4 bytes read. */
-  total_len = GET_ARTNET_FRAME_LEN (client->inbuf, client->in_len) + 4;
+  len = sizeof (controller_addr);
+  ret = recvfrom (g_io_channel_unix_get_fd (source),
+                  client->inbuf, ARTNET_MESSAGE_LEN, 0,
+                  &controller_addr, &len);
+  len = ret;
 
-  /* we need to make sure to not read more than the current opc package */
-  if (client->in_len < 3)
+  if (ret < 0)
     {
-      /* opc header (4 bytes) */
-      ret = recv (g_io_channel_unix_get_fd (source),
-                  client->inbuf + client->in_len,
-                  4 - client->in_len,
-                  0);
-    }
-  else if (client->in_len < MIN (total_len, ARTNET_MESSAGE_LEN))
-    {
-      ret = recv (g_io_channel_unix_get_fd (source),
-                  client->inbuf + client->in_len,
-                  MIN (total_len, ARTNET_MESSAGE_LEN) - client->in_len,
-                  0);
-    }
-  else
-    {
-      ret = recv (g_io_channel_unix_get_fd (source),
-                  dump_buffer,
-                  MIN (total_len - ARTNET_MESSAGE_LEN - client->dump_len,
-                       sizeof (dump_buffer)),
-                  0);
-    }
-
-  if (ret == 0)
-    {
-      g_printerr ("empty recv - shutting down client %p.\n", client);
-      PX_SOURCE (client)->is_connected = FALSE;
-      g_object_unref (client);
-      return FALSE;
+      perror ("recvfrom");
+      return TRUE;
     }
 
   if (ret < 0)
@@ -222,40 +273,68 @@ artnet_node_socket_recv (GIOChannel   *source,
       return TRUE;
     }
 
-  if (ret > 0)
+  if (ret < 12 ||
+      strncmp (client->inbuf, "Art-Net", 8) != 0)
     {
-      if (client->in_len < ARTNET_MESSAGE_LEN)
-        client->in_len += ret;
-      else
-        client->dump_len += ret;
+      g_printerr ("invalid Art-Net package\n");
+
+      return TRUE;
     }
 
-  if (client->in_len >= 4)
+  opcode = client->inbuf[8] + client->inbuf[9] * 256;
+
+
+  switch (opcode)
     {
-      PxSource *pxsource = PX_SOURCE (client);
+      case 0x2000:   /* ArtPoll */
+        protocol = client->inbuf[10] * 256 + client->inbuf[11];
+        g_printerr ("ArtPoll: V%d\n", protocol);
+        g_io_add_watch (source, G_IO_OUT, artnet_node_send_poll_reply, client);
+        break;
 
-      total_len = GET_ARTNET_FRAME_LEN (client->inbuf, client->in_len) + 4;
+      case 0x2100:   /* ArtPollReply */
+        g_printerr ("ArtPollReply\n");
+        /* ignore */
+        break;
 
-      if (client->in_len + client->dump_len == total_len)
-        {
-          gint i;
+      case 0x5000:   /* ArtDMX */
+        protocol = client->inbuf[10] * 256 + client->inbuf[11];
+        g_printerr ("ArtDMX: V%d\n", protocol);
 
-          for (i = 0; i < pxsource->num_pixels; i++)
-            {
-              if (i * 3 >= client->in_len - 4)
-                break;
+        if (protocol == 14 && len >= 18)
+          {
+            PxSource *pxsource = PX_SOURCE (client);
+            gint n_channels = client->inbuf[17] + client->inbuf[16] * 256;
+            gint i;
+            gint universe;
 
-              pxsource->cur_frame_rgba[i*4 + 0] = client->inbuf[4 + i*3 + 0] / 255.0f;
-              pxsource->cur_frame_rgba[i*4 + 1] = client->inbuf[4 + i*3 + 1] / 255.0f;
-              pxsource->cur_frame_rgba[i*4 + 2] = client->inbuf[4 + i*3 + 2] / 255.0f;
-              pxsource->cur_frame_rgba[i*4 + 3] = 1.0f;
-            }
-          client->in_len = 0;
-          client->dump_len = 0;
+            universe = client->inbuf[14] + client->inbuf[15] * 256;
+            g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
 
-          pxsource->timestamp = opc_get_current_time ();
-          opc_broker_notify_frame (pxsource->broker, pxsource);
-        }
+            if (n_channels <= 0 ||
+                len < 18 + n_channels)
+              break;
+
+            for (i = 0; i < pxsource->num_pixels; i++)
+              {
+                if (i * 4 + 3 > n_channels)
+                  break;
+
+                pxsource->cur_frame_rgba[i*4 + 0] = client->inbuf[18 + i*4 + 0] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 1] = client->inbuf[18 + i*4 + 1] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 2] = client->inbuf[18 + i*4 + 2] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 3] = client->inbuf[18 + i*4 + 3] / 255.0f;
+              }
+
+            pxsource->timestamp = opc_get_current_time ();
+            opc_broker_notify_frame (pxsource->broker, pxsource);
+          }
+
+        break;
+
+      default:
+        g_printerr ("ignoring Art-Net Opcode %04x\n", opcode);
+        break;
     }
 
   return TRUE;

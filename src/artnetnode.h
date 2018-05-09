@@ -24,8 +24,6 @@ struct _ArtnetNode
   OpcBroker  *broker;
 
   GIOChannel *gio;
-  gint        dump_len;
-  gint        in_len;
   guint8     *inbuf;
 };
 
