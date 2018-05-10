@@ -145,8 +145,8 @@ artnet_node_get_network_parameters (gint                     sock_fd,
           struct ifreq ifr;
 
           success = TRUE;
-          memcpy (addr, ifa->ifa_addr, sizeof (ifa->ifa_addr));
-          memcpy (broadcast, ifa->ifa_broadaddr, sizeof (ifa->ifa_broadaddr));
+          memcpy (addr, ifa->ifa_addr, sizeof (*ifa->ifa_addr));
+          memcpy (broadcast, ifa->ifa_broadaddr, sizeof (*ifa->ifa_broadaddr));
           /* set artnet port number 0x1936 */
           ((struct sockaddr_in *) broadcast)->sin_port = htons (6454);
         }
