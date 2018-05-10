@@ -423,6 +423,7 @@ artnet_node_socket_recv (GIOChannel   *source,
             gint n_channels = inbuf[17] + inbuf[16] * 256;
             gint i;
             gint universe;
+            gint cur_idx;
 
             universe = inbuf[14] + inbuf[15] * 256;
             g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
@@ -431,15 +432,20 @@ artnet_node_socket_recv (GIOChannel   *source,
                 len < 18 + n_channels)
               break;
 
-            for (i = 0; i < pxsource->num_pixels; i++)
+            /* each universe has 128 LEDs with 4 RGBA channels each */
+            /* DMX data starts at byte 18. */
+            cur_idx = 18;
+            for (i = universe * 128; i < pxsource->num_pixels; i++)
               {
-                if (i * 4 + 3 > n_channels)
+                if (cur_idx + 3 > n_channels)
                   break;
 
-                pxsource->cur_frame_rgba[i*4 + 0] = inbuf[18 + i*4 + 0] / 255.0f;
-                pxsource->cur_frame_rgba[i*4 + 1] = inbuf[18 + i*4 + 1] / 255.0f;
-                pxsource->cur_frame_rgba[i*4 + 2] = inbuf[18 + i*4 + 2] / 255.0f;
-                pxsource->cur_frame_rgba[i*4 + 3] = inbuf[18 + i*4 + 3] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 0] = inbuf[cur_idx + 0] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 1] = inbuf[cur_idx + 1] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 2] = inbuf[cur_idx + 2] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 3] = inbuf[cur_idx + 3] / 255.0f;
+
+                cur_idx += 4;
               }
 
             pxsource->timestamp = opc_get_current_time ();
