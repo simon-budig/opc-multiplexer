@@ -24,7 +24,10 @@ struct _ArtnetNode
   OpcBroker  *broker;
 
   GIOChannel *gio;
-  guint8     *inbuf;
+
+  struct sockaddr_storage addr;
+  struct sockaddr_storage broadcast;
+  guint8                  hwaddr[6];
 };
 
 

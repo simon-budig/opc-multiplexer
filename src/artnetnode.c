@@ -3,11 +3,16 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <arpa/inet.h>
+#include <net/if.h>
 #include <netinet/in.h>
+#include <linux/if_packet.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <error.h>
+#include <endian.h>
+#include <ifaddrs.h>
 
 #include <glib-object.h>
 
@@ -17,9 +22,50 @@
 #include "pxsource.h"
 #include "artnetnode.h"
 
+#define INET_NTOP(src, dst, size)                                                   \
+              inet_ntop ((*((struct sockaddr_storage *) &(src))).ss_family,                                           \
+                         (*((struct sockaddr_storage *) &(src))).ss_family == AF_INET ?                               \
+                           (void *) &(((struct sockaddr_in *) &(src))->sin_addr) :  \
+                           (void *) &(((struct sockaddr_in6 *)&(src))->sin6_addr),  \
+                         (dst), (size))
+
 static gboolean   artnet_node_socket_recv (GIOChannel   *source,
                                            GIOCondition  condition,
                                            gpointer      data);
+
+typedef struct _artpollreply ArtPollReply;
+struct _artpollreply {
+  guint8  header[8];
+  guint16 opcode;
+  guint32 v4ip;
+  guint16 port;
+  guint16 version;
+  guint8  netswitch;
+  guint8  subswitch;
+  guint16 oeminfo;
+  guint8  ubea;
+  guint8  status;
+  guint16 estacode;
+  guint8  shortname[18];
+  guint8  longname[64];
+  guint8  nodereport[64];
+  guint16 numports;
+  guint8  port_types[4];
+  guint8  input_status[4];
+  guint8  output_status[4];
+  guint8  input_switch[4];
+  guint8  output_switch[4];
+  guint8  swvideo;
+  guint8  swmacro;
+  guint8  swremote;
+  guint8  spare[3];
+  guint8  style;
+  guint8  mac[6];
+  guint32 v4ip_2;
+  guint8  bind_index;
+  guint8  status_2;
+  guint8  filler[26];
+} __attribute__((packed));
 
 #define ARTNET_MESSAGE_LEN (18 + 512 + 1)
 
@@ -59,6 +105,56 @@ artnet_node_finalize (GObject *object)
     g_io_channel_unref (client->gio);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+
+static gboolean
+artnet_node_get_network_parameters (gint                     sock_fd,
+                                    struct sockaddr_storage *addr,
+                                    struct sockaddr_storage *broadcast,
+                                    guint8                  *hwaddr)
+{
+  struct ifaddrs *ifaddrs = NULL, *ifa;
+  gchar name[128];
+  gboolean success = FALSE;
+
+  if (getifaddrs (&ifaddrs) < 0)
+    {
+      perror ("getifaddrs");
+      return FALSE;
+    }
+
+  for (ifa = ifaddrs; ifa; ifa = ifa->ifa_next)
+    {
+      int family;
+
+      family = ifa->ifa_addr->sa_family;
+
+      /* MAC Address... */
+      if (family == AF_PACKET &&
+          memcmp (((struct sockaddr_ll *) ifa->ifa_addr)->sll_addr,
+                  "\x00\x00\x00\x00\x00\x00", 6))
+        {
+          memcpy (hwaddr, ((struct sockaddr_ll *) ifa->ifa_addr)->sll_addr, 6);
+        }
+
+      if (!success &&
+          family == AF_INET &&
+          ifa->ifa_flags & IFF_BROADCAST)
+        {
+          struct ifreq ifr;
+
+          success = TRUE;
+          memcpy (addr, ifa->ifa_addr, sizeof (ifa->ifa_addr));
+          memcpy (broadcast, ifa->ifa_broadaddr, sizeof (ifa->ifa_broadaddr));
+          /* set artnet port number 0x1936 */
+          ((struct sockaddr_in *) broadcast)->sin_port = htons (6454);
+        }
+    }
+
+  freeifaddrs (ifaddrs);
+
+  return success;
 }
 
 
@@ -109,10 +205,6 @@ artnet_node_open_socket (void)
           setsockopt (fd, SOL_SOCKET, SO_BROADCAST,
                       (void *) &flag, sizeof (flag));
 
-          flag = 0;
-          setsockopt (fd, IPPROTO_IP, IP_MULTICAST_LOOP,
-                      (void *) &flag, sizeof (flag));
-
           ret = bind (fd, res->ai_addr, res->ai_addrlen);
           if (ret >= 0)
             break;
@@ -141,6 +233,7 @@ artnet_node_new (OpcBroker *broker,
   PxSource   *pxsource;
   ArtnetNode *client;
   gint fd;
+  gchar controller_name[128];
 
   client = g_object_new (ARTNET_TYPE_NODE, NULL);
   pxsource = PX_SOURCE (client);
@@ -154,10 +247,23 @@ artnet_node_new (OpcBroker *broker,
   pxsource->is_connected = TRUE;
 
   fd = artnet_node_open_socket ();
+  if (fd >= 0 &&
+      artnet_node_get_network_parameters (fd,
+                                          &client->addr,
+                                          &client->broadcast,
+                                          client->hwaddr))
+    {
+      g_printerr ("local IP: %s\n",
+                  INET_NTOP (client->addr, controller_name, sizeof (controller_name)));
+      g_printerr ("broadcast: %s\n",
+                  INET_NTOP (client->broadcast, controller_name, sizeof (controller_name)));
+      g_printerr ("hwaddr: %02x:%02x:%02x:%02x:%02x:%02x\n\n",
+                  client->hwaddr[0], client->hwaddr[1], client->hwaddr[2],
+                  client->hwaddr[3], client->hwaddr[4], client->hwaddr[5]);
+    }
 
   client->gio = g_io_channel_unix_new (fd);
   g_io_channel_set_close_on_unref (client->gio, TRUE);
-  client->inbuf = g_new0 (guint8, ARTNET_MESSAGE_LEN);
 
   g_io_add_watch (client->gio, G_IO_IN | G_IO_ERR | G_IO_HUP,
                   artnet_node_socket_recv, client);
@@ -172,58 +278,72 @@ artnet_node_send_poll_reply (GIOChannel   *source,
                              gpointer      data)
 {
   ArtnetNode *client = ARTNET_NODE (data);
-  struct sockaddr_in dest_addr;
   gint fd, ret;
-  guint8 pollreply[] =
-    "Art-Net\x00"       // header
-    "\x00\x21"          // opcode 0x2100
-    "\xc0\xa8\x02\xb7"  // IP-Addr.
-    "\x36\x19"          // PortNr. 0x1936
-    "\x00\x00\x00\x00"  // Version, NetSwitch, SubSwitch
-    "\x00\x00"          // OEM-Info
-    "\x00"              // UBEA-Version
-    "\xd2"              // Status-Code
-    "\xf0\x7f"          // ESTA-Code
+  ArtPollReply replypkt = { 0, };
 
-    // short name
-    "OPC-Multiplexer\x00\x00\x00"
+  /* build ArtPollReply-Packet */
+  strncpy (replypkt.header, "Art-Net", sizeof (replypkt.header) - 1);
+  replypkt.opcode     = htole16 (0x2100);
+  replypkt.v4ip       = ((struct sockaddr_in *) &client->addr)->sin_addr.s_addr;
+  replypkt.port       = htole16 (0x1936);
+  replypkt.version    = 0x00;
+  replypkt.netswitch  = 0x00;
+  replypkt.subswitch  = 0x00;
+  replypkt.oeminfo    = htobe16 (0x00);
+  replypkt.ubea       = 0x00;
+  replypkt.status     = 0xd2;
+  replypkt.estacode   = htole16 (0x7ff0);
 
-    // long name
-    "OPC-Multiplexer\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  strncpy (replypkt.shortname,  "OPC-Multiplexer",
+           sizeof (replypkt.shortname) - 1);
+  strncpy (replypkt.longname,   "OPC-Multiplexer",
+           sizeof (replypkt.longname) - 1);
+  strncpy (replypkt.nodereport, "#0001 [1] Artnet-OPC",
+           sizeof (replypkt.nodereport) - 1);
 
-    // node status report
-    "\x23\x30\x30\x30\x31\x20\x5b\x31\x5d\x20\x4f\x4c\x41\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+  replypkt.numports   = htobe16 (4);
+  replypkt.port_types[0] = 0xc0;
+  replypkt.port_types[1] = 0xc0;
+  replypkt.port_types[2] = 0xc0;
+  replypkt.port_types[3] = 0xc0;
 
-    "\x00\x04"           // Number of Ports
-    "\xc0\xc0\xc0\xc0"   // Port types
+  replypkt.input_status[0] = 0x00;
+  replypkt.input_status[1] = 0x00;
+  replypkt.input_status[2] = 0x00;
+  replypkt.input_status[3] = 0x00;
 
-    "\x00\x00\x00\x00"   // Input Status
-    "\x00\x00\x00\x00"   // Output Status
+  replypkt.output_status[0] = 0x00;
+  replypkt.output_status[1] = 0x00;
+  replypkt.output_status[2] = 0x00;
+  replypkt.output_status[3] = 0x00;
 
-    "\x01\x02\x03\x04"   // Input SubSwitch
-    "\x00\x00\x00\x00"   // Output SubSwitch
-    "\x00\x00\x00\x00\x00\x00"  // SwVideo, SwMacro, SwRemote, spare[3]...
-    "\x00"                      // Style
-    "\x18\x5e\x0f\x20\x64\x3a"  // MAC
-    "\xc0\xa8\x02\xb7"          // IP
-    "\x00"                      // Bind-Index
-    "\x08"                      // Status
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+  replypkt.input_switch[0] = 0x01;
+  replypkt.input_switch[1] = 0x02;
+  replypkt.input_switch[2] = 0x03;
+  replypkt.input_switch[3] = 0x04;
+
+  replypkt.output_switch[0] = 0x00;
+  replypkt.output_switch[1] = 0x00;
+  replypkt.output_switch[2] = 0x00;
+  replypkt.output_switch[3] = 0x00;
+
+  replypkt.swvideo = 0x00;
+  replypkt.swmacro = 0x00;
+  replypkt.swremote = 0x00;
+
+  replypkt.style = 0x00;
+
+  memcpy (replypkt.mac, client->hwaddr, sizeof (replypkt.mac));
+
+  replypkt.v4ip_2 = replypkt.v4ip;
+  replypkt.bind_index = 0;
+  replypkt.status_2 = 0x08;
 
   fd = g_io_channel_unix_get_fd (source);
 
-  dest_addr.sin_family = AF_INET;
-  dest_addr.sin_port = htons (6454);
-  dest_addr.sin_addr.s_addr = htonl (0xc0a802ff);
-  ret = sendto (fd, pollreply, sizeof (pollreply) - 1, 0,
-                &dest_addr, sizeof (dest_addr));
+  ret = sendto (fd, &replypkt, sizeof (replypkt), 0,
+                (struct sockaddr *) &client->broadcast,
+                sizeof (client->broadcast));
   if (ret < 0)
     perror ("sendto");
 
@@ -236,11 +356,13 @@ artnet_node_socket_recv (GIOChannel   *source,
                         GIOCondition  condition,
                         gpointer      data)
 {
+  static guchar inbuf[ARTNET_MESSAGE_LEN];
   ArtnetNode *client = ARTNET_NODE (data);
   gint opcode, protocol;
   gchar *c;
   ssize_t ret;
-  struct sockaddr controller_addr;
+  struct sockaddr_storage controller_addr;
+  gchar controller_name[128];
   socklen_t len;
 
   if (condition & G_IO_ERR ||
@@ -255,8 +377,8 @@ artnet_node_socket_recv (GIOChannel   *source,
 
   len = sizeof (controller_addr);
   ret = recvfrom (g_io_channel_unix_get_fd (source),
-                  client->inbuf, ARTNET_MESSAGE_LEN, 0,
-                  &controller_addr, &len);
+                  inbuf, ARTNET_MESSAGE_LEN, 0,
+                  (struct sockaddr *) &controller_addr, &len);
   len = ret;
 
   if (ret < 0)
@@ -265,29 +387,24 @@ artnet_node_socket_recv (GIOChannel   *source,
       return TRUE;
     }
 
-  if (ret < 0)
-    {
-      g_io_channel_unref (source);
-      g_printerr ("got empty request.\n");
-
-      return TRUE;
-    }
-
   if (ret < 12 ||
-      strncmp (client->inbuf, "Art-Net", 8) != 0)
+      strncmp (inbuf, "Art-Net", 8) != 0)
     {
       g_printerr ("invalid Art-Net package\n");
 
       return TRUE;
     }
 
-  opcode = client->inbuf[8] + client->inbuf[9] * 256;
+  opcode = inbuf[8] + inbuf[9] * 256;
 
+  g_printerr ("got opcode %04x, family %d from %s\n",
+              opcode, controller_addr.ss_family,
+              INET_NTOP (controller_addr, controller_name, sizeof (controller_name)));
 
   switch (opcode)
     {
       case 0x2000:   /* ArtPoll */
-        protocol = client->inbuf[10] * 256 + client->inbuf[11];
+        protocol = inbuf[10] * 256 + inbuf[11];
         g_printerr ("ArtPoll: V%d\n", protocol);
         g_io_add_watch (source, G_IO_OUT, artnet_node_send_poll_reply, client);
         break;
@@ -298,17 +415,16 @@ artnet_node_socket_recv (GIOChannel   *source,
         break;
 
       case 0x5000:   /* ArtDMX */
-        protocol = client->inbuf[10] * 256 + client->inbuf[11];
-        g_printerr ("ArtDMX: V%d\n", protocol);
+        protocol = inbuf[10] * 256 + inbuf[11];
 
         if (protocol == 14 && len >= 18)
           {
             PxSource *pxsource = PX_SOURCE (client);
-            gint n_channels = client->inbuf[17] + client->inbuf[16] * 256;
+            gint n_channels = inbuf[17] + inbuf[16] * 256;
             gint i;
             gint universe;
 
-            universe = client->inbuf[14] + client->inbuf[15] * 256;
+            universe = inbuf[14] + inbuf[15] * 256;
             g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
 
             if (n_channels <= 0 ||
@@ -320,10 +436,10 @@ artnet_node_socket_recv (GIOChannel   *source,
                 if (i * 4 + 3 > n_channels)
                   break;
 
-                pxsource->cur_frame_rgba[i*4 + 0] = client->inbuf[18 + i*4 + 0] / 255.0f;
-                pxsource->cur_frame_rgba[i*4 + 1] = client->inbuf[18 + i*4 + 1] / 255.0f;
-                pxsource->cur_frame_rgba[i*4 + 2] = client->inbuf[18 + i*4 + 2] / 255.0f;
-                pxsource->cur_frame_rgba[i*4 + 3] = client->inbuf[18 + i*4 + 3] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 0] = inbuf[18 + i*4 + 0] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 1] = inbuf[18 + i*4 + 1] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 2] = inbuf[18 + i*4 + 2] / 255.0f;
+                pxsource->cur_frame_rgba[i*4 + 3] = inbuf[18 + i*4 + 3] / 255.0f;
               }
 
             pxsource->timestamp = opc_get_current_time ();
