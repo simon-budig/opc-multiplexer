@@ -114,9 +114,8 @@ artnet_node_get_network_parameters (gint                     sock_fd,
                                     struct sockaddr_storage *broadcast,
                                     guint8                  *hwaddr)
 {
-  struct ifaddrs *ifaddrs = NULL, *ifa;
-  gchar name[128];
-  gboolean success = FALSE;
+  struct ifaddrs *ifaddrs = NULL, *ifa, *target_if;
+  gchar *if_name;
 
   if (getifaddrs (&ifaddrs) < 0)
     {
@@ -124,37 +123,52 @@ artnet_node_get_network_parameters (gint                     sock_fd,
       return FALSE;
     }
 
+  target_if = NULL;
+
+  /* look up an interface that is
+   *   - configured for AF_INET
+   *   - is active
+   *   - has a valid Broadcast address set
+   */
   for (ifa = ifaddrs; ifa; ifa = ifa->ifa_next)
     {
-      int family;
-
-      family = ifa->ifa_addr->sa_family;
-
-      /* MAC Address... */
-      if (family == AF_PACKET &&
-          memcmp (((struct sockaddr_ll *) ifa->ifa_addr)->sll_addr,
-                  "\x00\x00\x00\x00\x00\x00", 6))
-        {
-          memcpy (hwaddr, ((struct sockaddr_ll *) ifa->ifa_addr)->sll_addr, 6);
-        }
-
-      if (!success &&
-          family == AF_INET &&
+      if (ifa->ifa_addr                       &&
+          ifa->ifa_addr->sa_family == AF_INET &&
+          ifa->ifa_flags & IFF_UP             &&
           ifa->ifa_flags & IFF_BROADCAST)
         {
-          struct ifreq ifr;
+          target_if = ifa;
 
-          success = TRUE;
-          memcpy (addr, ifa->ifa_addr, sizeof (*ifa->ifa_addr));
-          memcpy (broadcast, ifa->ifa_broadaddr, sizeof (*ifa->ifa_broadaddr));
-          /* set artnet port number 0x1936 */
-          ((struct sockaddr_in *) broadcast)->sin_port = htons (6454);
+          break;
         }
+    }
+
+  if (target_if)
+    {
+      /* look for the MAC-Address (via AF_PACKET interface).
+       * Match to target-IF by interface name.
+       */
+      for (ifa = ifaddrs; ifa; ifa = ifa->ifa_next)
+        {
+          /* MAC Address... */
+          if (ifa->ifa_addr                          &&
+              ifa->ifa_addr->sa_family == AF_PACKET  &&
+              !strcmp (target_if->ifa_name, ifa->ifa_name))
+            {
+              memcpy (hwaddr, ((struct sockaddr_ll *) ifa->ifa_addr)->sll_addr, 6);
+              break;
+            }
+        }
+
+      memcpy (addr, target_if->ifa_addr, sizeof (*target_if->ifa_addr));
+      memcpy (broadcast, target_if->ifa_broadaddr, sizeof (*target_if->ifa_broadaddr));
+      /* set artnet port number 0x1936 */
+      ((struct sockaddr_in *) broadcast)->sin_port = htons (6454);
     }
 
   freeifaddrs (ifaddrs);
 
-  return success;
+  return target_if ? TRUE : FALSE;
 }
 
 
