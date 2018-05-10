@@ -5,9 +5,9 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
-#include <net/if.h>
 #include <netinet/in.h>
 #include <linux/if_packet.h>
+#include <linux/wireless.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <error.h>
@@ -108,7 +108,7 @@ artnet_node_finalize (GObject *object)
 }
 
 
-static gboolean
+static gint
 artnet_node_get_network_parameters (gint                     sock_fd,
                                     struct sockaddr_storage *addr,
                                     struct sockaddr_storage *broadcast,
@@ -120,7 +120,7 @@ artnet_node_get_network_parameters (gint                     sock_fd,
   if (getifaddrs (&ifaddrs) < 0)
     {
       perror ("getifaddrs");
-      return FALSE;
+      return -1;
     }
 
   target_if = NULL;
@@ -128,23 +128,48 @@ artnet_node_get_network_parameters (gint                     sock_fd,
   /* look up an interface that is
    *   - configured for AF_INET
    *   - is active
+   *   - is not a loopback device
    *   - has a valid Broadcast address set
+   *
+   *   we also check for wireless extensions
+   *   and prefer interfaces without them.
    */
   for (ifa = ifaddrs; ifa; ifa = ifa->ifa_next)
     {
       if (ifa->ifa_addr                       &&
           ifa->ifa_addr->sa_family == AF_INET &&
           ifa->ifa_flags & IFF_UP             &&
+          !(ifa->ifa_flags & IFF_LOOPBACK)    &&
           ifa->ifa_flags & IFF_BROADCAST)
         {
-          target_if = ifa;
+          /* check if this interface is wireless */
+          struct iwreq pwrq;
+          memset (&pwrq, 0, sizeof (pwrq));
+          strncpy (pwrq.ifr_name, ifa->ifa_name, IFNAMSIZ);
 
-          break;
+          if (ioctl (sock_fd, SIOCGIWNAME, &pwrq) != -1)
+            {
+              g_printerr ("interface %s is wireless with protocol %s\n",
+                          ifa->ifa_name, pwrq.u.name);
+
+              if (!target_if)
+                target_if = ifa;
+            }
+          else
+            {
+              g_printerr ("interface %s is not wireless\n",
+                          ifa->ifa_name, pwrq.u.name);
+              target_if = ifa;
+
+              break;
+            }
         }
     }
 
   if (target_if)
     {
+      g_printerr ("choosing %s\n\n", target_if->ifa_name);
+
       /* look for the MAC-Address (via AF_PACKET interface).
        * Match to target-IF by interface name.
        */
@@ -168,12 +193,12 @@ artnet_node_get_network_parameters (gint                     sock_fd,
 
   freeifaddrs (ifaddrs);
 
-  return target_if ? TRUE : FALSE;
+  return target_if ? 0 : -1;
 }
 
 
 static gint
-artnet_node_open_socket (void)
+artnet_node_open_socket (ArtnetNode *client)
 {
   struct addrinfo hints, *res, *reslist;
   int fd, flag, ret;
@@ -195,29 +220,38 @@ artnet_node_open_socket (void)
 
   for (res = reslist; res; res = res->ai_next)
     {
-      /* Check for ipv6 socket, on Linux this also accepts ipv4 */
-      if (res->ai_family != AF_INET6)
+      if (res->ai_family != AF_INET)
         continue;
 
       fd = socket (res->ai_family, res->ai_socktype, res->ai_protocol);
 
       if (fd >= 0)
         {
-          flag = 0;
-#ifdef IPV6_V6ONLY
-          setsockopt (fd, IPPROTO_IPV6, IPV6_V6ONLY,
-                      (void *) &flag, sizeof (flag));
-#endif
           flag = 1;
 #ifdef SO_REUSEPORT
-          setsockopt (fd, SOL_SOCKET, SO_REUSEPORT,
-                      (void *) &flag, sizeof (flag));
+          ret = setsockopt (fd, SOL_SOCKET, SO_REUSEPORT,
+                            (void *) &flag, sizeof (flag));
+          if (ret < 0)
+            perror ("setsockopt (SO_REUSEPORT)");
 #endif
-          setsockopt (fd, SOL_SOCKET, SO_REUSEADDR,
-                      (void *) &flag, sizeof (flag));
+          ret = setsockopt (fd, SOL_SOCKET, SO_REUSEADDR,
+                            (void *) &flag, sizeof (flag));
+          if (ret < 0)
+            perror ("setsockopt (SO_REUSEADDR)");
 
-          setsockopt (fd, SOL_SOCKET, SO_BROADCAST,
-                      (void *) &flag, sizeof (flag));
+          ret = setsockopt (fd, SOL_SOCKET, SO_BROADCAST,
+                            (void *) &flag, sizeof (flag));
+          if (ret < 0)
+            perror ("setsockopt (SO_REUSEADDR)");
+
+          ret = artnet_node_get_network_parameters (fd,
+                                                    &client->addr,
+                                                    &client->broadcast,
+                                                    client->hwaddr);
+          if (ret < 0)
+            {
+              perror ("get_np");
+            }
 
           ret = bind (fd, res->ai_addr, res->ai_addrlen);
           if (ret >= 0)
@@ -260,12 +294,8 @@ artnet_node_new (OpcBroker *broker,
   pxsource->is_remote = is_remote;
   pxsource->is_connected = TRUE;
 
-  fd = artnet_node_open_socket ();
-  if (fd >= 0 &&
-      artnet_node_get_network_parameters (fd,
-                                          &client->addr,
-                                          &client->broadcast,
-                                          client->hwaddr))
+  fd = artnet_node_open_socket (client);
+  if (fd >= 0)
     {
       g_printerr ("local IP: %s\n",
                   INET_NTOP (client->addr, controller_name, sizeof (controller_name)));
