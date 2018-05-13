@@ -502,6 +502,7 @@ artnet_node_socket_recv (GIOChannel   *source,
              * Universe 2: 0-509: 170 RGB lights
              * Universe 3: 0-509: 170 RGB lights
              * Universe 4: 0-5:     2 RGB lights
+             *             6: global alpha
              */
 
             switch (universe)
@@ -525,7 +526,6 @@ artnet_node_socket_recv (GIOChannel   *source,
 
                       dmx_idx += 3;
                       px_idx += 1;
-                      break;
                     }
                   break;
 
@@ -546,14 +546,13 @@ artnet_node_socket_recv (GIOChannel   *source,
 
                       dmx_idx += 3;
                       px_idx += 1;
-                      break;
                     }
 
                   if (n_channels > 6)
                     {
                       for (px_idx = 0; px_idx < pxsource->num_pixels; px_idx++)
                         {
-                          pxsource->cur_frame_rgba[px_idx*4 + 3] = inbuf[18 + dmx_idx + 6] / 255.0f;
+                          pxsource->cur_frame_rgba[px_idx*4 + 3] = inbuf[18 + 6] / 255.0f;
                         }
                     }
 
