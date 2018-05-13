@@ -467,7 +467,7 @@ artnet_node_socket_recv (GIOChannel   *source,
             gint n_channels = inbuf[17] + inbuf[16] * 256;
             gint i;
             gint universe;
-            gint cur_idx;
+            gint px_idx, dmx_idx;
 
             universe = inbuf[14] + inbuf[15] * 256;
             g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
@@ -476,7 +476,12 @@ artnet_node_socket_recv (GIOChannel   *source,
                 len < 18 + n_channels)
               break;
 
-            /* each universe has 128 LEDs with 4 RGBA channels each */
+#if 0
+            /* RGBA-Mode
+             *
+             * each universe has 128 LEDs with 4 RGBA channels each
+             */
+
             /* DMX data starts at byte 18. */
             cur_idx = 18;
             for (i = universe * 128; i < pxsource->num_pixels; i++)
@@ -491,6 +496,73 @@ artnet_node_socket_recv (GIOChannel   *source,
 
                 cur_idx += 4;
               }
+#else
+            /* Party-Mode
+             * Universe 1: 0-509: 170 RGB lights
+             * Universe 2: 0-509: 170 RGB lights
+             * Universe 3: 0-509: 170 RGB lights
+             * Universe 4: 0-5:     2 RGB lights
+             */
+
+            switch (universe)
+              {
+                case 1:
+                case 2:
+                case 3:
+                  dmx_idx = 0;
+                  px_idx = (universe - 1) * 170;
+
+                  while (1)
+                    {
+                      if (dmx_idx + 2 >= n_channels ||
+                          px_idx >= pxsource->num_pixels)
+                        break;
+
+                      pxsource->cur_frame_rgba[px_idx*4 + 0] = inbuf[18 + dmx_idx + 0] / 255.0f;
+                      pxsource->cur_frame_rgba[px_idx*4 + 1] = inbuf[18 + dmx_idx + 1] / 255.0f;
+                      pxsource->cur_frame_rgba[px_idx*4 + 2] = inbuf[18 + dmx_idx + 2] / 255.0f;
+                      /* alpha untouched */
+
+                      dmx_idx += 3;
+                      px_idx += 1;
+                      break;
+                    }
+                  break;
+
+                case 4:
+                  dmx_idx = 0;
+                  px_idx = (universe - 1) * 170;
+
+                  while (1)
+                    {
+                      if (dmx_idx + 2 >= n_channels ||
+                          px_idx >= pxsource->num_pixels)
+                        break;
+
+                      pxsource->cur_frame_rgba[px_idx*4 + 0] = inbuf[18 + dmx_idx + 0] / 255.0f;
+                      pxsource->cur_frame_rgba[px_idx*4 + 1] = inbuf[18 + dmx_idx + 1] / 255.0f;
+                      pxsource->cur_frame_rgba[px_idx*4 + 2] = inbuf[18 + dmx_idx + 2] / 255.0f;
+                      /* alpha untouched */
+
+                      dmx_idx += 3;
+                      px_idx += 1;
+                      break;
+                    }
+
+                  if (n_channels > 6)
+                    {
+                      for (px_idx = 0; px_idx < pxsource->num_pixels; px_idx++)
+                        {
+                          pxsource->cur_frame_rgba[px_idx*4 + 3] = inbuf[18 + dmx_idx + 6] / 255.0f;
+                        }
+                    }
+
+                  break;
+
+                default:
+                  break;
+              }
+#endif
 
             pxsource->timestamp = opc_get_current_time ();
             opc_broker_notify_frame (pxsource->broker, pxsource);
