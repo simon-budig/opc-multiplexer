@@ -346,30 +346,30 @@ artnet_node_send_poll_reply (GIOChannel   *source,
            sizeof (replypkt.nodereport) - 1);
 
   replypkt.numports   = htobe16 (4);
-  replypkt.port_types[0] = 0x80;
-  replypkt.port_types[1] = 0x80;
-  replypkt.port_types[2] = 0x80;
-  replypkt.port_types[3] = 0x80;
+  replypkt.port_types[0] = 0xc0;
+  replypkt.port_types[1] = 0xc0;
+  replypkt.port_types[2] = 0xc0;
+  replypkt.port_types[3] = 0xc0;
 
-  replypkt.input_status[0] = 0x00;
-  replypkt.input_status[1] = 0x00;
-  replypkt.input_status[2] = 0x00;
-  replypkt.input_status[3] = 0x00;
+  replypkt.input_status[0] = 0x08;
+  replypkt.input_status[1] = 0x08;
+  replypkt.input_status[2] = 0x08;
+  replypkt.input_status[3] = 0x08;
 
-  replypkt.output_status[0] = 0x00;
-  replypkt.output_status[1] = 0x00;
-  replypkt.output_status[2] = 0x00;
-  replypkt.output_status[3] = 0x00;
+  replypkt.output_status[0] = 0x01;
+  replypkt.output_status[1] = 0x01;
+  replypkt.output_status[2] = 0x01;
+  replypkt.output_status[3] = 0x01;
 
-  replypkt.input_switch[0] = 0x01;
-  replypkt.input_switch[1] = 0x02;
-  replypkt.input_switch[2] = 0x03;
-  replypkt.input_switch[3] = 0x04;
+  replypkt.input_switch[0] = 0x00;
+  replypkt.input_switch[1] = 0x00;
+  replypkt.input_switch[2] = 0x00;
+  replypkt.input_switch[3] = 0x00;
 
-  replypkt.output_switch[0] = 0x00;
-  replypkt.output_switch[1] = 0x00;
-  replypkt.output_switch[2] = 0x00;
-  replypkt.output_switch[3] = 0x00;
+  replypkt.output_switch[0] = 0x01;
+  replypkt.output_switch[1] = 0x02;
+  replypkt.output_switch[2] = 0x03;
+  replypkt.output_switch[3] = 0x04;
 
   replypkt.swvideo = 0x00;
   replypkt.swmacro = 0x00;
@@ -478,12 +478,12 @@ artnet_node_socket_recv (GIOChannel   *source,
             if (opc_get_current_time () - pxsource->timestamp > 5.0)
               client->last_seqno = 0;
 
-            if (seqno != 0 &&
-                client->last_seqno != 0 &&
-                (gint) seqno - client->last_seqno < 0)
-              {
-                break;
-              }
+         // if (seqno != 0 &&
+         //     client->last_seqno != 0 &&
+         //     (gint) seqno - client->last_seqno < 0)
+         //   {
+         //     break;
+         //   }
 
             if (n_channels <= 0 ||
                 len < 18 + n_channels)

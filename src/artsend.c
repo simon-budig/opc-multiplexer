@@ -13,6 +13,7 @@
 #include <error.h>
 #include <endian.h>
 #include <ifaddrs.h>
+#include <unistd.h>
 
 #include <glib-object.h>
 
@@ -211,7 +212,7 @@ main (gint argc,
   guint8 hwaddr[6];
   gint fd;
   ArtDMX fb[4] = { 0, };
-  gint i, j;
+  gint i, j, a;
 
   fd = artnet_node_open_socket (&addr, &broadcast, hwaddr);
   if (fd >= 0)
@@ -225,6 +226,7 @@ main (gint argc,
                   hwaddr[3], hwaddr[4], hwaddr[5]);
     }
 
+#if 0
   for (i = 0; i < 4; i++)
     {
       strncpy (fb[i].header, "Art-Net", sizeof (fb[i].header) - 1);
@@ -234,12 +236,16 @@ main (gint argc,
       fb[i].sequence = 0;
       fb[i].physical = 0;
       fb[i].universe = htole16 (i + 1);
+      fb[i].sequence = a * 4 + i;
 
-      fb[i].length = htobe16 (i < 3 ? 512 : 8);
+      fb[i].length = htobe16 (512);
 
-      for (j = 0; j < 512; j++)
+      for (j = 0; j < 512; j += 4)
         {
-          fb[i].dmxdata[j] = atoi (argv[1]);
+          fb[i].dmxdata[j + 0] = 0;
+          fb[i].dmxdata[j + 1] = 0;
+          fb[i].dmxdata[j + 2] = 0;
+          fb[i].dmxdata[j + 3] = (i * 128 + j / 4) / 2;
         }
     }
 
@@ -253,6 +259,43 @@ main (gint argc,
       if (ret < 0)
         perror ("sendto");
     }
+
+#else
+  for (a = 255; a >= 0; a--)
+    {
+      for (i = 0; i < 4; i++)
+        {
+          strncpy (fb[i].header, "Art-Net", sizeof (fb[i].header) - 1);
+          fb[i].opcode = htole16 (0x5000);
+          fb[i].version = htobe16 (14);
+
+          fb[i].sequence = 0;
+          fb[i].physical = 0;
+          fb[i].universe = htole16 (i + 1);
+          fb[i].sequence = a * 4 + i;
+
+          fb[i].length = htobe16 (i < 3 ? 512 : 8);
+
+          for (j = 0; j < 512; j++)
+            {
+              fb[i].dmxdata[j] = a;
+            }
+        }
+
+      for (i = 0; i < 4; i++)
+        {
+          gint ret;
+
+          ret = sendto (fd, &fb[i], sizeof (fb[i]), 0,
+                        (struct sockaddr *) &broadcast,
+                        sizeof (broadcast));
+          if (ret < 0)
+            perror ("sendto");
+        }
+
+      usleep (5 * 1000);
+    }
+#endif
 
   return 0;
 }
