@@ -28,6 +28,8 @@ struct _ArtnetNode
   struct sockaddr_storage addr;
   struct sockaddr_storage broadcast;
   guint8                  hwaddr[6];
+
+  guint8      last_seqno;
 };
 
 

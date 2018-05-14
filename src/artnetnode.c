@@ -467,14 +467,29 @@ artnet_node_socket_recv (GIOChannel   *source,
             gint n_channels = inbuf[17] + inbuf[16] * 256;
             gint i;
             gint universe;
+            guint8 seqno;
             gint px_idx, dmx_idx;
 
             universe = inbuf[14] + inbuf[15] * 256;
             g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
 
+            seqno = inbuf[12];
+
+            if (opc_get_current_time () - pxsource->timestamp > 5.0)
+              client->last_seqno = 0;
+
+            if (seqno != 0 &&
+                client->last_seqno != 0 &&
+                (gint) seqno - client->last_seqno < 0)
+              {
+                break;
+              }
+
             if (n_channels <= 0 ||
                 len < 18 + n_channels)
               break;
+
+            client->last_seqno = seqno;
 
 #if 0
             /* RGBA-Mode
