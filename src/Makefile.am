@@ -1,4 +1,6 @@
-bin_PROGRAMS = opc-mpx
+bin_PROGRAMS = opc-mpx \
+	artsend
+
 opc_mpx_SOURCES =   \
 	artnetnode.c \
 	artnetnode.h \
@@ -13,6 +15,9 @@ opc_mpx_SOURCES =   \
 	pxsource.c \
 	pxsource.h
 
+artsend_SOURCES = \
+	artsend.c
+
 AM_CPPFLAGS =             \
 	-D_GNU_SOURCE     \
 	$(GLIB_CFLAGS)    \
@@ -20,5 +25,9 @@ AM_CPPFLAGS =             \
 	$(CFLAGS)
 
 opc_mpx_LDADD =         \
+	$(GLIB_LIBS)    \
+	$(GOBJECT_LIBS)
+
+artsend_LDADD =         \
 	$(GLIB_LIBS)    \
 	$(GOBJECT_LIBS)

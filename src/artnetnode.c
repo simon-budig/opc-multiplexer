@@ -346,10 +346,10 @@ artnet_node_send_poll_reply (GIOChannel   *source,
            sizeof (replypkt.nodereport) - 1);
 
   replypkt.numports   = htobe16 (4);
-  replypkt.port_types[0] = 0xc0;
-  replypkt.port_types[1] = 0xc0;
-  replypkt.port_types[2] = 0xc0;
-  replypkt.port_types[3] = 0xc0;
+  replypkt.port_types[0] = 0x80;
+  replypkt.port_types[1] = 0x80;
+  replypkt.port_types[2] = 0x80;
+  replypkt.port_types[3] = 0x80;
 
   replypkt.input_status[0] = 0x00;
   replypkt.input_status[1] = 0x00;
