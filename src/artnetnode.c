@@ -268,6 +268,37 @@ artnet_node_open_socket (ArtnetNode *client)
 }
 
 
+static gboolean
+artnet_node_watchdog_timeout (gpointer data)
+{
+  ArtnetNode *client = ARTNET_NODE (data);
+  PxSource *pxsource = PX_SOURCE (data);
+  gint i;
+  gfloat max_alpha = 0;
+
+  for (i = 0; i < pxsource->num_pixels; i++)
+    {
+      pxsource->cur_frame_rgba[i*4 + 3] = MAX (0.0, pxsource->cur_frame_rgba[i*4 + 3] - 0.015);
+      max_alpha = MAX (max_alpha, pxsource->cur_frame_rgba[i*4 + 3]);
+    }
+
+  if (client->watchdog_id)
+    g_source_remove (client->watchdog_id);
+
+  client->watchdog_id = 0;
+
+  if (max_alpha > 0.001)
+    {
+      client->watchdog_id = g_timeout_add (20, artnet_node_watchdog_timeout,
+                                           client);
+    }
+
+  opc_broker_notify_frame (pxsource->broker, pxsource);
+
+  return FALSE;
+}
+
+
 /**
  * artnet_node_new:
  *
@@ -441,9 +472,9 @@ artnet_node_socket_recv (GIOChannel   *source,
 
   opcode = inbuf[8] + inbuf[9] * 256;
 
-  g_printerr ("got opcode %04x, family %d from %s\n",
-              opcode, controller_addr.ss_family,
-              INET_NTOP (controller_addr, controller_name, sizeof (controller_name)));
+//g_printerr ("got opcode %04x, family %d from %s\n",
+//            opcode, controller_addr.ss_family,
+//            INET_NTOP (controller_addr, controller_name, sizeof (controller_name)));
 
   switch (opcode)
     {
@@ -471,7 +502,7 @@ artnet_node_socket_recv (GIOChannel   *source,
             gint px_idx, dmx_idx;
 
             universe = inbuf[14] + inbuf[15] * 256;
-            g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
+            // g_printerr ("universe %d, n_channels: %d\n", universe, n_channels);
 
             seqno = inbuf[12];
 
@@ -523,6 +554,14 @@ artnet_node_socket_recv (GIOChannel   *source,
             switch (universe)
               {
                 case 1:
+                  if (n_channels > 510)
+                    {
+                      for (px_idx = 0; px_idx < pxsource->num_pixels; px_idx++)
+                        {
+                          pxsource->cur_frame_rgba[px_idx*4 + 3] = inbuf[18 + 510] / 255.0f;
+                        }
+                    }
+
                 case 2:
                 case 3:
                   dmx_idx = 0;
@@ -563,14 +602,6 @@ artnet_node_socket_recv (GIOChannel   *source,
                       px_idx += 1;
                     }
 
-                  if (n_channels > 6)
-                    {
-                      for (px_idx = 0; px_idx < pxsource->num_pixels; px_idx++)
-                        {
-                          pxsource->cur_frame_rgba[px_idx*4 + 3] = inbuf[18 + 6] / 255.0f;
-                        }
-                    }
-
                   break;
 
                 default:
@@ -578,6 +609,10 @@ artnet_node_socket_recv (GIOChannel   *source,
               }
 #endif
 
+            if (client->watchdog_id)
+              g_source_remove (client->watchdog_id);
+            client->watchdog_id = g_timeout_add (5555, artnet_node_watchdog_timeout,
+                                                 client);
             pxsource->timestamp = opc_get_current_time ();
             opc_broker_notify_frame (pxsource->broker, pxsource);
           }
