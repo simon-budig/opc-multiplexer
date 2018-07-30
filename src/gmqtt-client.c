@@ -45,18 +45,22 @@ struct _gmqtt_subscription
 
 static guint gmqtt_client_signals[LAST_SIGNAL] = { 0 };
 
-static void      gmqtt_client_set_property (GObject      *object,
-                                            guint         property_id,
-                                            const GValue *value,
-                                            GParamSpec   *pspec);
-static void      gmqtt_client_get_property (GObject      *object,
-                                            guint         property_id,
-                                            GValue       *value,
-                                            GParamSpec   *pspec);
-static void      gmqtt_client_finalize     (GObject  *object);
-static void      gmqtt_client_on_message   (struct mosquitto *mosq,
-                                            gpointer          user_data,
-                                            const struct mosquitto_message *msg);
+static void      gmqtt_client_set_property  (GObject      *object,
+                                             guint         property_id,
+                                             const GValue *value,
+                                             GParamSpec   *pspec);
+static void      gmqtt_client_get_property  (GObject      *object,
+                                             guint         property_id,
+                                             GValue       *value,
+                                             GParamSpec   *pspec);
+static void      gmqtt_client_finalize      (GObject  *object);
+static void      gmqtt_client_on_message    (struct mosquitto *mosq,
+                                             gpointer          user_data,
+                                             const struct mosquitto_message *msg);
+static void      gmqtt_client_on_disconnect (struct mosquitto *mosq,
+                                             gpointer          user_data,
+                                             gint              rc);
+
 
 G_DEFINE_TYPE (GMqttClient, gmqtt_client, G_TYPE_OBJECT)
 
@@ -288,6 +292,7 @@ gmqtt_client_new_with_will (gchar  *name,
     }
 
   mosquitto_message_callback_set (client->mosq, gmqtt_client_on_message);
+  mosquitto_disconnect_callback_set (client->mosq, gmqtt_client_on_disconnect);
   mosquitto_connect_async (client->mosq, client->server, client->port, 15);
 
   client->mosq_src = gmqtt_source_new (client->mosq);
@@ -322,6 +327,34 @@ gmqtt_client_on_message (struct mosquitto               *mosq,
                              msg);
             }
         }
+    }
+}
+
+
+static gboolean
+gmqtt_client_reconnect (gpointer user_data)
+{
+  GMqttClient *client = GMQTT_CLIENT (user_data);
+
+  g_printerr ("attempting reconnect\n");
+  mosquitto_reconnect_async (client->mosq);
+
+  client->reconnect_timeout = 0;
+
+  return G_SOURCE_REMOVE;
+}
+
+
+static void
+gmqtt_client_on_disconnect (struct mosquitto *mosq,
+                            gpointer          user_data,
+                            gint              rc)
+{
+  GMqttClient *client = GMQTT_CLIENT (user_data);
+
+  if (rc != 0 && client->reconnect_timeout == 0)
+    {
+      client->reconnect_timeout = g_timeout_add (5 * 1000, gmqtt_client_reconnect, client);
     }
 }
 

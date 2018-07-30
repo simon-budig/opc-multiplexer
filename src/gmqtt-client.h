@@ -26,6 +26,8 @@ struct _GMqttClient
   struct mosquitto *mosq;
   GSource    *mosq_src;
   GList      *subscriptions;
+
+  guint       reconnect_timeout;
 };
 
 struct _GMqttClientClass
