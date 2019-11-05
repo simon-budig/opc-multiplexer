@@ -336,7 +336,7 @@ gmqtt_client_reconnect (gpointer user_data)
 {
   GMqttClient *client = GMQTT_CLIENT (user_data);
 
-  g_printerr ("attempting reconnect\n");
+  g_printerr ("gmqtt: attempting reconnect\n");
   mosquitto_reconnect_async (client->mosq);
 
   client->reconnect_timeout = 0;
@@ -352,6 +352,7 @@ gmqtt_client_on_disconnect (struct mosquitto *mosq,
 {
   GMqttClient *client = GMQTT_CLIENT (user_data);
 
+  g_printerr ("gmqtt: disconnect (%d)\n", rc);
   if (rc != 0 && client->reconnect_timeout == 0)
     {
       client->reconnect_timeout = g_timeout_add (5 * 1000, gmqtt_client_reconnect, client);

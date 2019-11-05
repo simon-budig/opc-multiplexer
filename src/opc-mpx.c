@@ -64,7 +64,7 @@ mqtt_message_received_brightness_callback (GMqttClient              *client,
 
   broker->global_brightness = CLAMP (brightness / 100.0, 0.0, 1.0);
 
-  g_printerr ("mosqutto-message: %s: %s\n", msg->topic, msg->payload);
+  g_printerr ("mosquitto-message: %s: %s\n", msg->topic, msg->payload);
 }
 
 
