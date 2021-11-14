@@ -22,6 +22,7 @@ struct _GMqttClient
   gchar      *server;
   gint        port;
   gint        default_qos;
+  gboolean    connected;
 
   struct mosquitto *mosq;
   GSource    *mosq_src;

@@ -28,6 +28,7 @@ enum
   PROP_SERVER,
   PROP_PORT,
   PROP_DEFAULT_QOS,
+  PROP_CONNECTED,
 };
 
 enum
@@ -119,6 +120,12 @@ gmqtt_client_class_init (GMqttClientClass *klass)
                                                      0,
                                                      G_PARAM_READWRITE |
                                                      G_PARAM_CONSTRUCT));
+
+  g_object_class_install_property (object_class, PROP_CONNECTED,
+                                   g_param_spec_boolean ("connected",
+                                                         NULL, NULL,
+                                                         FALSE,
+                                                         G_PARAM_READABLE));
 }
 
 
@@ -162,6 +169,7 @@ gmqtt_client_set_property (GObject      *object,
   GMqttClient *client = GMQTT_CLIENT (object);
   const gchar *name = NULL, *server = NULL;
   gint port, qos;
+  gboolean connected;
 
   switch (property_id)
     {
@@ -209,6 +217,17 @@ gmqtt_client_set_property (GObject      *object,
         g_object_notify (object, "default-qos");
         break;
 
+      case PROP_CONNECTED:
+        connected = g_value_get_boolean (value);
+        g_printerr ("CONNECGTED\n");
+
+        if (connected == client->connected)
+          return;
+
+        client->connected = connected;
+        g_object_notify (object, "connected");
+        break;
+
       default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
         break;
@@ -236,6 +255,14 @@ gmqtt_client_get_property (GObject    *object,
 
       case PROP_PORT:
         g_value_set_int (value, client->port);
+        break;
+
+      case PROP_DEFAULT_QOS:
+        g_value_set_int (value, client->default_qos);
+        break;
+
+      case PROP_CONNECTED:
+        g_value_set_boolean (value, client->connected);
         break;
 
       default:
@@ -356,7 +383,7 @@ gmqtt_client_on_connect (struct mosquitto *mosq,
   GMqttClient *client = GMQTT_CLIENT (user_data);
 
   g_printerr ("gmqtt: connect (%d)\n", rc);
-  if (rc == 0 && client->reconnect_timeout != 0)
+  if (rc == 0)
     {
       GList *l;
 
@@ -376,6 +403,12 @@ gmqtt_client_on_connect (struct mosquitto *mosq,
             }
         }
 
+      client->connected = TRUE;
+      g_object_notify (G_OBJECT (client), "connected");
+    }
+
+  if (rc == 0 && client->reconnect_timeout != 0)
+    {
       g_source_remove (client->reconnect_timeout);
       client->reconnect_timeout = 0;
     }
@@ -393,6 +426,9 @@ gmqtt_client_on_disconnect (struct mosquitto *mosq,
   if (client->reconnect_timeout == 0)
     {
       client->reconnect_timeout = g_timeout_add (5 * 1000, gmqtt_client_reconnect, client);
+
+      client->connected = FALSE;
+      g_object_notify (G_OBJECT (client), "connected");
     }
 }
 
