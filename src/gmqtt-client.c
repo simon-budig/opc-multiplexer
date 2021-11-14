@@ -57,6 +57,9 @@ static void      gmqtt_client_finalize      (GObject  *object);
 static void      gmqtt_client_on_message    (struct mosquitto *mosq,
                                              gpointer          user_data,
                                              const struct mosquitto_message *msg);
+static void      gmqtt_client_on_connect    (struct mosquitto *mosq,
+                                             gpointer          user_data,
+                                             gint              rc);
 static void      gmqtt_client_on_disconnect (struct mosquitto *mosq,
                                              gpointer          user_data,
                                              gint              rc);
@@ -292,6 +295,7 @@ gmqtt_client_new_with_will (gchar  *name,
     }
 
   mosquitto_message_callback_set (client->mosq, gmqtt_client_on_message);
+  mosquitto_connect_callback_set (client->mosq, gmqtt_client_on_connect);
   mosquitto_disconnect_callback_set (client->mosq, gmqtt_client_on_disconnect);
   mosquitto_connect_async (client->mosq, client->server, client->port, 15);
 
@@ -339,9 +343,23 @@ gmqtt_client_reconnect (gpointer user_data)
   g_printerr ("gmqtt: attempting reconnect\n");
   mosquitto_reconnect_async (client->mosq);
 
-  client->reconnect_timeout = 0;
+  return G_SOURCE_CONTINUE;
+}
 
-  return G_SOURCE_REMOVE;
+
+static void
+gmqtt_client_on_connect (struct mosquitto *mosq,
+                         gpointer          user_data,
+                         gint              rc)
+{
+  GMqttClient *client = GMQTT_CLIENT (user_data);
+
+  g_printerr ("gmqtt: connect (%d)\n", rc);
+  if (rc == 0 && client->reconnect_timeout != 0)
+    {
+      g_source_remove (client->reconnect_timeout);
+      client->reconnect_timeout = 0;
+    }
 }
 
 
@@ -353,7 +371,7 @@ gmqtt_client_on_disconnect (struct mosquitto *mosq,
   GMqttClient *client = GMQTT_CLIENT (user_data);
 
   g_printerr ("gmqtt: disconnect (%d)\n", rc);
-  if (rc != 0 && client->reconnect_timeout == 0)
+  if (client->reconnect_timeout == 0)
     {
       client->reconnect_timeout = g_timeout_add (5 * 1000, gmqtt_client_reconnect, client);
     }
