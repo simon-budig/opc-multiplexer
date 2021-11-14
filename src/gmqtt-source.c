@@ -8,7 +8,7 @@ struct _GMqttSource
 {
   GSource           source;
   struct mosquitto *mosq;
-  GPollFD          *gfd;
+  gpointer         *fd_tag;
 };
 
 static gboolean gmqtt_source_prepare (GSource      *source,
@@ -33,6 +33,7 @@ gmqtt_source_new (struct mosquitto *mosq)
 {
   GMqttSource *gmqtt;
   GSource *source;
+  gint fd;
 
   source = g_source_new (&gmqtt_sourcefuncs,
                          sizeof (GMqttSource));
@@ -40,11 +41,11 @@ gmqtt_source_new (struct mosquitto *mosq)
   gmqtt = (GMqttSource *) source;
 
   gmqtt->mosq = mosq;
+  gmqtt->fd_tag = NULL;
 
-  gmqtt->gfd = g_new0 (GPollFD, 1);
-  gmqtt->gfd->fd = -1;
-
-  g_source_add_poll (&gmqtt->source, gmqtt->gfd);
+  fd = mosquitto_socket (gmqtt->mosq);
+  if (fd >= 0)
+    gmqtt->fd_tag = g_source_add_unix_fd (source, fd, G_IO_IN);
 
   return &gmqtt->source;
 }
@@ -55,18 +56,29 @@ gmqtt_source_prepare (GSource *source,
                       gint    *timeout)
 {
   GMqttSource *gmqtt = (GMqttSource *) source;
+  gboolean want_write;
 
   mosquitto_loop_misc (gmqtt->mosq);
 
-  gmqtt->gfd->fd = mosquitto_socket (gmqtt->mosq);
-  gmqtt->gfd->events = G_IO_IN;
-  if (mosquitto_want_write (gmqtt->mosq))
+  want_write = mosquitto_want_write (gmqtt->mosq);
+
+  *timeout = 500;
+
+  if (gmqtt->fd_tag)
     {
-      gmqtt->gfd->events |= G_IO_OUT;
-      return TRUE;
+      g_source_modify_unix_fd (source, gmqtt->fd_tag,
+                               want_write ? G_IO_IN | G_IO_OUT : G_IO_IN);
+    }
+  else
+    {
+      gint fd;
+      fd = mosquitto_socket (gmqtt->mosq);
+      gmqtt->fd_tag = g_source_add_unix_fd (source, fd,
+                                            want_write ? G_IO_IN | G_IO_OUT :
+                                                         G_IO_IN);
     }
 
-  return FALSE;
+  return want_write ? TRUE : FALSE;
 }
 
 
@@ -76,10 +88,10 @@ gmqtt_source_check (GSource *source)
   GMqttSource *gmqtt = (GMqttSource *) source;
   gint dummy_timeout;
 
-  if (gmqtt->gfd->revents)
+  if (g_source_query_unix_fd (source, gmqtt->fd_tag))
     return TRUE;
 
-  return gmqtt_source_prepare (source, &dummy_timeout);
+  return FALSE;
 }
 
 
@@ -89,13 +101,16 @@ gmqtt_source_dispatch (GSource     *source,
                        gpointer     data)
 {
   GMqttSource *gmqtt = (GMqttSource *) source;
+  GIOCondition cond;
 
-  if (gmqtt->gfd->revents & G_IO_IN)
+  cond = g_source_query_unix_fd (source, gmqtt->fd_tag);
+
+  if (cond & G_IO_IN)
     {
       mosquitto_loop_read (gmqtt->mosq, 1);
     }
 
-  if (gmqtt->gfd->revents & G_IO_OUT)
+  if (cond & G_IO_OUT)
     {
       mosquitto_loop_write (gmqtt->mosq, 1);
     }
@@ -109,8 +124,7 @@ gmqtt_source_finalize (GSource *source)
 {
   GMqttSource *gmqtt = (GMqttSource *) source;
 
-  g_source_remove_poll (source, gmqtt->gfd);
-  g_free (gmqtt->gfd);
+  g_source_remove_unix_fd (source, gmqtt->fd_tag);
 }
 
 
