@@ -41,6 +41,7 @@ struct _gmqtt_subscription
 {
   gchar  *pattern;
   GQuark  quark;
+  gint    qos;
 };
 
 static guint gmqtt_client_signals[LAST_SIGNAL] = { 0 };
@@ -357,6 +358,24 @@ gmqtt_client_on_connect (struct mosquitto *mosq,
   g_printerr ("gmqtt: connect (%d)\n", rc);
   if (rc == 0 && client->reconnect_timeout != 0)
     {
+      GList *l;
+
+      /* restore subscriptions */
+      for (l = client->subscriptions; l; l = g_list_next (l))
+        {
+          GMqttSubscription *sub = l->data;
+          gint res;
+
+          if ((res = mosquitto_subscribe (client->mosq,
+                                          NULL,
+                                          sub->pattern,
+                                          sub->qos)) != MOSQ_ERR_SUCCESS)
+            {
+              g_warning ("re-subscription to %s failed (%s) \n",
+                         sub->pattern, mosquitto_strerror (res));
+            }
+        }
+
       g_source_remove (client->reconnect_timeout);
       client->reconnect_timeout = 0;
     }
@@ -402,7 +421,8 @@ gmqtt_client_subscribe_full (GMqttClient *client,
                                   subscription,
                                   qos)) != MOSQ_ERR_SUCCESS)
     {
-      g_warning ("subscription to %s failed (%s) \n", subscription, mosquitto_strerror (res));
+      g_warning ("subscription to %s failed (%s) \n",
+                 subscription, mosquitto_strerror (res));
 
       return FALSE;
     }
@@ -410,6 +430,7 @@ gmqtt_client_subscribe_full (GMqttClient *client,
   sub = g_new0 (GMqttSubscription, 1);
   sub->pattern = g_strdup (subscription);
   sub->quark = g_quark_from_string (sub_id);
+  sub->qos = qos;
 
   client->subscriptions = g_list_append (client->subscriptions, sub);
 
