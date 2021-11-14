@@ -49,6 +49,23 @@ opc_get_current_time ()
 
 
 static void
+mqtt_connected_update (GObject    *object,
+                       GParamSpec *pspec,
+                       gpointer    user_data)
+{
+  GMqttClient *gmqtt = GMQTT_CLIENT (object);
+  gboolean connected;
+
+  g_object_get (object, "connected", &connected, NULL);
+
+  if (connected)
+    {
+      gmqtt_client_publish (gmqtt, "hasi/lights/balldachin/online", "true", -1);
+    }
+}
+
+
+static void
 mqtt_message_received_brightness_callback (GMqttClient              *client,
                                            struct mosquitto_message *msg,
                                            gpointer                  user_data)
@@ -103,14 +120,15 @@ main (int   argc,
                                       "hasi/lights/balldachin/online",
                                       "false", -1);
 
+  g_signal_connect (gmqtt, "notify::connected",
+                    G_CALLBACK (mqtt_connected_update),
+                    broker);
   g_signal_connect (gmqtt, "message-received::brightness",
                     G_CALLBACK (mqtt_message_received_brightness_callback),
                     broker);
 
   gmqtt_client_subscribe_full (gmqtt, "brightness",
                                "hasi/lights/balldachin/brightness", QOS_1);
-
-  gmqtt_client_publish (gmqtt, "hasi/lights/balldachin/online", "true", -1);
 
   /* mainloop */
 
