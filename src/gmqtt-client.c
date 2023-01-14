@@ -460,7 +460,9 @@ gmqtt_client_subscribe_full (GMqttClient *client,
       g_warning ("subscription to %s failed (%s) \n",
                  subscription, mosquitto_strerror (res));
 
-      return FALSE;
+      /* don't return.
+       * We save the subscription data to be able to restore it later. */
+      /* return FALSE; */
     }
 
   sub = g_new0 (GMqttSubscription, 1);
