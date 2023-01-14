@@ -301,6 +301,7 @@ gmqtt_client_new_with_will (gchar  *name,
                             gssize  will_payload_len)
 {
   GMqttClient *client;
+  int ret;
 
   client = g_object_new (GMQTT_TYPE_CLIENT,
                          "name",   name,
@@ -329,6 +330,12 @@ gmqtt_client_new_with_will (gchar  *name,
 
   client->mosq_src = gmqtt_source_new (client->mosq);
   g_source_attach (client->mosq_src, NULL);
+
+  ret = mosquitto_connect_async (client->mosq, client->server, client->port, 15);
+  if (ret != MOSQ_ERR_SUCCESS)
+    {
+      gmqtt_client_on_disconnect (client->mosq, client, ret);
+    }
 
   return client;
 }
@@ -368,8 +375,8 @@ gmqtt_client_reconnect (gpointer user_data)
 {
   GMqttClient *client = GMQTT_CLIENT (user_data);
 
-  g_printerr ("gmqtt: attempting reconnect\n");
-  mosquitto_reconnect_async (client->mosq);
+  g_printerr ("gmqtt: attempting (re)connect\n");
+  mosquitto_connect_async (client->mosq, client->server, client->port, 15);
 
   return G_SOURCE_CONTINUE;
 }
